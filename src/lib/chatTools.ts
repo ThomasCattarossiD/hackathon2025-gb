@@ -1,436 +1,200 @@
-import { tool } from 'ai';
 import { z } from 'zod';
-import {
-  checkRoomAvailability,
-  findRoomsByCharacteristics,
-  createBooking,
-  updateMeeting,
-  getUserMeetings,
-} from '@/services/bookingService';
+import { tool } from 'ai';
+import * as bookingService from '@/services/bookingService';
+import { format, addMinutes } from 'date-fns';
+import { fr } from 'date-fns/locale';
 
-// ========================
-// ZOD SCHEMAS FOR VALIDATION
-// ========================
+interface Room {
+    id: string;
+    name: string;
+    capacity: number;
+    location: string;
+    equipment: string[];
+    [key: string]: any;
+}
 
-const checkAvailabilitySchema = z
-  .object({
-    roomId: z.string().describe('ID de la salle à vérifier'),
-    startTime: z
-      .string()
-      .describe('Date et heure de début au format ISO 8601 (ex: 2026-12-12T14:00:00)'),
-    duration: z
-      .number()
-      .int()
-      .min(15)
-      .optional()
-      .describe('Durée en minutes (par défaut 60, minimum 15)'),
-  })
-  .describe('Paramètres pour vérifier la disponibilité d\'une salle');
+// TOOL 1: findRoomsByCarac
+export const findRoomsByCaracSchema = z.object({
+    startTime: z.string().describe('REQUIRED - ISO 8601 date string for the start of the meeting.'),
+    duration: z.number().min(15).describe('REQUIRED - Duration of the meeting in minutes.'),
+    capacity: z.number().optional().describe('Optional capacity of the room.'),
+    equipment: z.array(z.string()).optional().describe('Optional list of equipment required.'),
+    location: z.string().optional().describe('Optional location of the room.'),
+    name: z.string().optional().describe('Optional name of the room.'),
+});
 
-const findRoomsByCaracSchema = z
-  .object({
-    capacity: z
-      .number()
-      .int()
-      .optional()
-      .describe('Capacité minimale requise (nombre de personnes)'),
-    equipment: z
-      .array(z.string())
-      .optional()
-      .describe('Liste des équipements requis (ex: ["wifi", "vidéo-projecteur"])'),
-    location: z
-      .string()
-      .optional()
-      .describe('Localisation recherchée (ex: "1er étage", "RDC")'),
-    name: z
-      .string()
-      .optional()
-      .describe('Nom ou partie du nom de la salle (ex: "Aquarium")'),
-  })
-  .describe('Paramètres pour rechercher des salles par caractéristiques');
-
-const createMeetingSchema = z
-  .object({
-    roomId: z.string().describe('ID de la salle à réserver'),
-    startTime: z
-      .string()
-      .describe('Date et heure de début au format ISO 8601'),
-    duration: z
-      .number()
-      .int()
-      .min(15)
-      .describe('Durée en minutes'),
-    title: z
-      .string()
-      .optional()
-      .describe('Titre de la réunion'),
-  })
-  .describe('Paramètres pour créer une réunion/réservation');
-
-// ========================
-// TOOLS DEFINITION
-// ========================
-
-export const chatTools = {
-  // OUTIL 1 : VÉRIFIER LA DISPONIBILITÉ D'UNE SALLE
-  checkAvailability: tool({
-    description:
-      'Vérifie si une salle spécifique est disponible pour un créneau donné',
-    inputSchema: checkAvailabilitySchema,
-    execute: async ({ roomId, startTime, duration = 60 }) => {
-      console.log('🤖 Check Availability :', roomId, startTime, (duration || 60) + 'min');
-
-      try {
-        const result = await checkRoomAvailability(roomId, startTime, duration || 60);
-
-        if (!result.available || !result.room) {
-          return {
-            available: false,
-            text: `❌ La salle n'est pas disponible à cet horaire.`,
-          };
-        }
-
-        const startDate = new Date(startTime);
-        const endDate = new Date(startDate.getTime() + (duration || 60) * 60000);
-        const text = `✅ **${result.room.name}** est disponible le ${startDate.toLocaleDateString('fr-FR')} de ${startDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} à ${endDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}.\n📍 ${result.room.location}\n👥 ${result.room.capacity} personnes`;
-
-        return {
-          available: true,
-          text: text,
-          room: result.room,
-        };
-      } catch (error) {
-        console.error('❌ Erreur checkAvailability:', error);
-        return {
-          available: false,
-          text: `❌ Erreur lors de la vérification: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
-        };
-      }
-    },
-  }),
-
-  // OUTIL 2 : RECHERCHER DES SALLES PAR CARACTÉRISTIQUES
-  // Retourne UNIQUEMENT les IDs des salles matchant les critères
-  findRoomsByCarac: tool({
-    description:
-      'Recherche les IDs des salles selon des critères (capacité, équipements, localisation, nom). L\'IA doit ensuite vérifier la dispo de chaque salle avec checkAvailability.',
-    inputSchema: findRoomsByCaracSchema,
-    execute: async ({ capacity, equipment, location, name }) => {
-      console.log('🤖 Find Rooms by Characteristics :', {
-        capacity,
-        equipment,
-        location,
-        name,
-      });
-
-      try {
-        const rooms = await findRoomsByCharacteristics({
-          capacity,
-          equipment,
-          location,
-          name,
+export async function findRoomsByCarac({
+    startTime,
+    duration,
+    capacity,
+    equipment,
+    location,
+    name,
+}: z.infer<typeof findRoomsByCaracSchema>): Promise<string> {
+    try {
+        const potentialRooms = await bookingService.findRoomsByCharacteristics({
+            capacity,
+            equipment,
+            location,
+            name,
         });
 
-        if (!rooms || rooms.length === 0) {
-          return {
-            found: false,
-            text: `❌ Aucune salle ne correspond à ces critères.`,
-            roomIds: [],
-          };
+        if (!potentialRooms || potentialRooms.length === 0) {
+            return '❌ Aucune salle ne correspond à vos critères de base.';
         }
 
-        // Retourner UNIQUEMENT les IDs et noms (pas de vérification dispo)
-        const roomInfo = rooms.map((r: any) => ({
-          id: r.id,
-          name: r.name,
-        }));
+        const availableRooms: { room: Room; score: number }[] = [];
 
-        const formattedNames = rooms
-          .map((r: any) => `• ${r.name}`)
-          .join('\n');
+        for (const room of potentialRooms) {
+            const { available } = await bookingService.checkRoomAvailability(room.id, startTime, duration);
+            if (available) {
+                // Calculate relevance score
+                let score = 0;
+                if (equipment && room.equipment) {
+                    score += equipment.filter(e => room.equipment.includes(e)).length * 10;
+                }
+                if (capacity && room.capacity) {
+                    // Prefer right-sized rooms
+                    const capacityDiff = room.capacity - capacity;
+                    if (capacityDiff >= 0) {
+                        score += 5 - Math.min(capacityDiff / 2, 4); // Decrease score for oversized rooms
+                    }
+                }
+                if (name && room.name.toLowerCase().includes(name.toLowerCase())) {
+                    score += 3;
+                }
+                if (location && room.location.toLowerCase().includes(location.toLowerCase())) {
+                    score += 2;
+                }
+                availableRooms.push({ room, score });
+            }
+        }
 
-        const text = `✅ ${rooms.length} salle(s) correspondent à ces critères:\n\n${formattedNames}\n\nJe vais vérifier la disponibilité de chacune...`;
+        if (availableRooms.length === 0) {
+            return '❌ Aucune salle disponible à cet horaire.';
+        }
 
-        return {
-          found: true,
-          text: text,
-          roomIds: roomInfo,
-        };
-      } catch (error) {
-        console.error('❌ Erreur findRoomsByCarac:', error);
-        return {
-          found: false,
-          text: `❌ Erreur lors de la recherche: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
-          roomIds: [],
-        };
-      }
-    },
-  }),
+        // Sort by relevance score (descending)
+        availableRooms.sort((a, b) => b.score - a.score);
 
-  // OUTIL 3 : CRÉER UNE RÉUNION/RÉSERVATION
-  createMeeting: tool({
-    description: 'Crée une réunion/réservation pour une salle',
-    inputSchema: createMeetingSchema,
-    execute: async ({ roomId, startTime, duration }) => {
-      console.log('🤖 Create Meeting :', roomId, startTime, duration + 'min');
+        const startDate = new Date(startTime);
+        const endDate = addMinutes(startDate, duration);
+        const dateStr = format(startDate, 'dd/MM/yyyy');
+        const startTimeStr = format(startDate, 'HH:mm');
+        const endTimeStr = format(endDate, 'HH:mm');
 
-      try {
-        // Note: on utilise roomId au lieu de roomName pour la nouvelle implémentation
-        const result = await createBooking(roomId, startTime, duration);
-        console.log('📦 Résultat :', result);
+        const header = `✅ ${availableRooms.length} salle(s) disponible(s) le ${dateStr} de ${startTimeStr} à ${endTimeStr}:\n\n`;
+        const roomList = availableRooms
+            .map(({ room }) => `• **${room.name}** • ${room.capacity} pers • ${room.location}`)
+            .join('\n');
 
-        if (!result.success) {
-          return {
-            success: false,
-            text: `❌ Impossible de créer la réunion: ${result.message}`,
-          };
+        return header + roomList;
+    } catch (error) {
+        console.error('Error in findRoomsByCarac:', error);
+        return '❌ Une erreur est survenue lors de la recherche de salles.';
+    }
+}
+
+
+// TOOL 2: proposeRoomToUser
+export const proposeRoomToUserSchema = z.object({
+    roomId: z.string().describe('The ID of the room to propose.'),
+    startTime: z.string().describe('ISO 8601 date string for the start of the meeting.'),
+    duration: z.number().describe('Duration of the meeting in minutes.'),
+});
+
+export async function proposeRoomToUser({
+    roomId,
+    startTime,
+    duration,
+}: z.infer<typeof proposeRoomToUserSchema>): Promise<string> {
+    try {
+        const { available, room } = await bookingService.checkRoomAvailability(roomId, startTime, duration);
+
+        if (!available || !room) {
+            return "❌ Cette salle n'est plus disponible à cet horaire.";
         }
 
         const startDate = new Date(startTime);
-        const endDate = new Date(startDate.getTime() + duration * 60000);
-        const text = `✅ Réunion créée avec succès!\n📅 ${startDate.toLocaleDateString('fr-FR')} de ${startDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} à ${endDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
+        const endDate = addMinutes(startDate, duration);
 
-        return {
-          success: true,
-          text: text,
-        };
-      } catch (error) {
-        console.error('❌ Erreur createMeeting:', error);
-        return {
-          success: false,
-          text: `❌ Erreur système: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
-        };
-      }
-    },
-  }),
+        const proposal = `
+✅ **${room.name}**
 
-  // OUTIL 4 : METTRE À JOUR UNE RÉUNION
-  updateMeeting: tool({
-    description: 'Modifie les détails d\'une réunion (horaire, titre, etc.)',
-    inputSchema: z
-      .object({
-        meetingId: z.string().describe('ID de la réunion à modifier'),
-        startTime: z
-          .string()
-          .optional()
-          .describe('Nouvelle date/heure de début (format ISO 8601)'),
-        endTime: z
-          .string()
-          .optional()
-          .describe('Nouvelle date/heure de fin (format ISO 8601)'),
-        title: z
-          .string()
-          .optional()
-          .describe('Nouveau titre de la réunion'),
-      })
-      .describe('Paramètres pour mettre à jour une réunion'),
-    execute: async ({ meetingId, startTime, endTime, title }) => {
-      console.log('🤖 Update Meeting :', meetingId, { startTime, endTime, title });
+📅 ${format(startDate, 'dd/MM/yyyy', { locale: fr })}
+⏰ ${format(startDate, 'HH:mm')} à ${format(endDate, 'HH:mm')} (${duration} min)
+📍 ${room.location}
+👥 ${room.capacity} personnes
+🛠️ Équipements: ${room.equipment ? room.equipment.join(', ') : 'N/A'}
 
-      try {
-        const updates: { start_time?: string; end_time?: string; title?: string } = {};
-        if (startTime) updates.start_time = startTime;
-        if (endTime) updates.end_time = endTime;
-        if (title) updates.title = title;
+Souhaitez-vous réserver cette salle?
+        `.trim();
 
-        const result = await updateMeeting(meetingId, updates);
-        console.log('📦 Résultat :', result);
+        return proposal;
+    } catch (error) {
+        console.error('Error in proposeRoomToUser:', error);
+        return '❌ Une erreur est survenue lors de la proposition de la salle.';
+    }
+}
 
-        const text = result.success
-          ? '✅ Réunion mise à jour avec succès !'
-          : `❌ ${result.message}`;
 
-        return {
-          success: result.success,
-          text: text,
-        };
-      } catch (error) {
-        console.error('❌ Erreur updateMeeting:', error);
-        return {
-          success: false,
-          text: `❌ Erreur lors de la mise à jour: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
-        };
-      }
-    },
-  }),
+// TOOL 3: createMeeting
+export const createMeetingSchema = z.object({
+    roomId: z.string().describe('The ID of the room to book.'),
+    startTime: z.string().describe('ISO 8601 date string for the start of the meeting.'),
+    duration: z.number().describe('Duration of the meeting in minutes.'),
+    title: z.string().optional().describe('Optional title for the meeting.'),
+    userId: z.string().describe("The user's ID."),
+});
 
-  // OUTIL 5 : LISTER LES RÉUNIONS DE L'UTILISATEUR
-  getUserMeetings: tool({
-    description: 'Récupère la liste des réunions prévues de l\'utilisateur',
-    inputSchema: z.object({}).describe('Aucun paramètre requis'),
-    execute: async () => {
-      console.log('🤖 Get User Meetings');
+export async function createMeeting({
+    roomId,
+    startTime,
+    duration,
+    userId,
+}: z.infer<typeof createMeetingSchema>): Promise<string> {
+    try {
+        // The bookingService.createBooking function requires a userId.
+        const result = await bookingService.createBooking(roomId, startTime, duration, userId);
 
-      try {
-        const result = await getUserMeetings();
-        console.log('📦 Réunions trouvées :', result.meetings);
+        if (result.success) {
+            const startDate = new Date(startTime);
+            const endDate = addMinutes(startDate, duration);
+            return `
+✅ **Réservation confirmée!**
 
-        if (!result.meetings || result.meetings.length === 0) {
-          return {
-            found: false,
-            text: 'Vous n\'avez aucune réunion prévue.',
-            meetings: [],
-          };
+📅 ${format(startDate, 'dd/MM/yyyy', { locale: fr })}
+⏰ ${format(startDate, 'HH:mm')} à ${format(endDate, 'HH:mm')}
+
+Votre réunion est réservée!
+            `.trim();
+        } else {
+            return `❌ Impossible de créer la réservation: ${result.message}`;
         }
+    } catch (error: any) {
+        console.error('Error in createMeeting:', error);
+        return `❌ Impossible de créer la réservation: ${error.message || 'Erreur inconnue'}`;
+    }
+}
 
-        const formattedList = result.meetings
-          .map(
-            (m: any) =>
-              `• **${m.title || 'Réunion'}** en ${m.room?.name || 'Salle'}\n  ${new Date(m.start_time).toLocaleString('fr-FR')}`
-          )
-          .join('\n');
-
-        const text = `📅 Vos réunions:\n${formattedList}`;
-
-        return {
-          found: true,
-          text: text,
-          meetings: result.meetings,
-        };
-      } catch (error) {
-        console.error('❌ Erreur getUserMeetings:', error);
-        return {
-          found: false,
-          text: `❌ Erreur lors de la récupération: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
-          meetings: [],
-        };
-      }
+export const chatTools = {
+    findRoomsByCarac: {
+        description: 'Find and filter available rooms by criteria. Returns a list of available rooms sorted by relevance.',
+        parameters: findRoomsByCaracSchema,
     },
-  }),
+    proposeRoomToUser: {
+        description: 'Show full room details and ask for confirmation. Re-verifies availability before proposing.',
+        parameters: proposeRoomToUserSchema,
+    },
+    createMeeting: {
+        description: 'Create the actual booking in the database.',
+        parameters: createMeetingSchema,
+    },
 };
 
-// Fonction pour créer les tools avec le contexte utilisateur (userId)
-export function createToolsWithUserContext(userId?: string) {
-  return {
-    checkAvailability: chatTools.checkAvailability,
-    findRoomsByCarac: chatTools.findRoomsByCarac,
-    
-    // TOOLS QUI NÉCESSITENT L'AUTHENTIFICATION
-    createMeeting: tool({
-      description: 'Crée une réunion/réservation pour une salle',
-      inputSchema: createMeetingSchema,
-      execute: async ({ roomId, startTime, duration }) => {
-        console.log('🤖 Create Meeting :', roomId, startTime, duration + 'min');
-
-        try {
-          const result = await createBooking(roomId, startTime, duration, userId);
-          console.log('📦 Résultat :', result);
-
-          if (!result.success) {
-            return {
-              success: false,
-              text: `❌ Impossible de créer la réunion: ${result.message}`,
-            };
-          }
-
-          const startDate = new Date(startTime);
-          const endDate = new Date(startDate.getTime() + duration * 60000);
-          const text = `✅ Réunion créée avec succès!\n📅 ${startDate.toLocaleDateString('fr-FR')} de ${startDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} à ${endDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
-
-          return {
-            success: true,
-            text: text,
-          };
-        } catch (error) {
-          console.error('❌ Erreur createMeeting:', error);
-          return {
-            success: false,
-            text: `❌ Erreur système: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
-          };
-        }
-      },
-    }),
-
-    updateMeeting: tool({
-      description: 'Modifie les détails d\'une réunion (horaire, titre, etc.)',
-      inputSchema: z
-        .object({
-          meetingId: z.string().describe('ID de la réunion à modifier'),
-          startTime: z
-            .string()
-            .optional()
-            .describe('Nouvelle date/heure de début (format ISO 8601)'),
-          endTime: z
-            .string()
-            .optional()
-            .describe('Nouvelle date/heure de fin (format ISO 8601)'),
-          title: z
-            .string()
-            .optional()
-            .describe('Nouveau titre de la réunion'),
-        })
-        .describe('Paramètres pour mettre à jour une réunion'),
-      execute: async ({ meetingId, startTime, endTime, title }) => {
-        console.log('🤖 Update Meeting :', meetingId, { startTime, endTime, title });
-
-        try {
-          const updates: { start_time?: string; end_time?: string; title?: string } = {};
-          if (startTime) updates.start_time = startTime;
-          if (endTime) updates.end_time = endTime;
-          if (title) updates.title = title;
-
-          const result = await updateMeeting(meetingId, updates, userId);
-          console.log('📦 Résultat :', result);
-
-          const text = result.success
-            ? '✅ Réunion mise à jour avec succès !'
-            : `❌ ${result.message}`;
-
-          return {
-            success: result.success,
-            text: text,
-          };
-        } catch (error) {
-          console.error('❌ Erreur updateMeeting:', error);
-          return {
-            success: false,
-            text: `❌ Erreur lors de la mise à jour: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
-          };
-        }
-      },
-    }),
-
-    getUserMeetings: tool({
-      description: 'Récupère la liste des réunions prévues de l\'utilisateur',
-      inputSchema: z.object({}).describe('Aucun paramètre requis'),
-      execute: async () => {
-        console.log('🤖 Get User Meetings');
-
-        try {
-          const result = await getUserMeetings(userId);
-          console.log('📦 Réunions trouvées :', result.meetings);
-
-          if (!result.meetings || result.meetings.length === 0) {
-            return {
-              found: false,
-              text: 'Vous n\'avez aucune réunion prévue.',
-              meetings: [],
-            };
-          }
-
-          const formattedList = result.meetings
-            .map(
-              (m: any) =>
-                `• **${m.title || 'Réunion'}** en ${m.room?.name || 'Salle'}\n  ${new Date(m.start_time).toLocaleString('fr-FR')}`
-            )
-            .join('\n');
-
-          const text = `📅 Vos réunions:\n${formattedList}`;
-
-          return {
-            found: true,
-            text: text,
-            meetings: result.meetings,
-          };
-        } catch (error) {
-          console.error('❌ Erreur getUserMeetings:', error);
-          return {
-            found: false,
-            text: `❌ Erreur lors de la récupération: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
-            meetings: [],
-          };
-        }
-      },
-    }),
-  };
-}
+// Tool execution handlers
+export const toolExecutors = {
+    findRoomsByCarac,
+    proposeRoomToUser,
+    createMeeting,
+};

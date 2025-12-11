@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import ReactMarkdown from "react-markdown";
 import ReservationsSidebar, { Reservation } from "./ReservationsSidebar";
 import { Separator } from "../ui/separator";
+import { createClient } from "@supabase/supabase-js";
 
 
 declare global {
@@ -31,6 +32,12 @@ interface ChatInterfaceProps {
     userId?: string;
 }
 
+// Initialize Supabase client
+const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+);
+
 export default function ChatInterface({ userId }: ChatInterfaceProps) {
     const [input, setInput] = useState("");
     const [isRecording, setIsRecording] = useState(false);
@@ -45,7 +52,7 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [reservations, setReservations] = useState<Reservation[]>([]);
 
-    const { messages, sendMessage, status } = useChat({
+    const { messages, setMessages, sendMessage, status } = useChat({
         api: "/api/chat",
         id: "chat-interface"
     } as any);
