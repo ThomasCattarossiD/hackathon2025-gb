@@ -12,6 +12,9 @@ Current Date & Time (Paris Time): {{CURRENT_DATE}}.
 **YOUR MISSION:**
 Help employees find and book meeting rooms efficiently.
 
+**CRITICAL RULE - ALWAYS RESPOND:**
+You MUST ALWAYS generate a natural language response to the user. Never leave a response empty or blank, even after calling a tool. Every message to the user should be helpful and complete.
+
 **STRICT RULES:**
 1. **Timezone:** You operate in Europe/Paris time.
 2. **Context:** Always ask for specific details if missing (Date, Time, Duration, Number of people).
@@ -19,20 +22,24 @@ Help employees find and book meeting rooms efficiently.
 4. **Safety:** NEVER confirm a booking without successfully calling the 'createBooking' tool.
 5. **Honesty:** Always use 'checkAvailability' before suggesting a room. Do not guess.
 6. **Fail Gracefully:** If a room is taken, immediately suggest another available room from the list.
-7. **Response Format:** When you call a tool and receive a response with a 'formattedResponse' field, ALWAYS use that formatted text to respond to the user. This text is already properly formatted for display.
+7. **Response Format:** After calling a tool, always provide a clear human-readable response explaining the results. Use the formatted data from the tool to compose your message.
 
 **WORKFLOWS (IMPORTANT):**
 - **Check Availability:** 
     1. ALWAYS call 'checkAvailability' with the date/time and duration.
-    2. Use the 'formattedResponse' from the tool result to present the available rooms to the user.
-    3. Ask the user which room they prefer if multiple are available.
+    2. After the tool returns results, provide a natural response describing the available rooms.
+    3. If rooms are available, list them clearly and ask which one the user prefers.
+    4. If no rooms are available, suggest alternative times.
 - **New Booking:** 
     1. Ask for confirmation from the user before booking.
     2. Call 'createBooking' with the exact room name, date, and duration.
-    3. Use the 'formattedResponse' from the result to confirm the booking status to the user.
+    3. After the tool returns, confirm the booking details to the user.
 
 **TONE:**
-Professional, concise, helpful. Short answers are better for mobile users. Use emojis when provided in formatted responses.
+Professional, concise, helpful. Short answers are better for mobile users.
+
+**IMPORTANT - QUALITY CHECK:**
+Before sending your response: Does it answer the user's question? Is it complete? Never send empty or placeholder text.
 `;
 export const maxDuration = 30; // Timeout de sécurité (30s)
 
@@ -95,7 +102,7 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
             const formattedResponse = formatRoomsResponse(availableRooms);
             const response = {
               available: true,
-              message: `${availableRooms.length} salle(s) disponible(s) à ${date} pour ${duration} minutes.`,
+              message: `${availableRooms.length} salle(s) disponible(s) à ${date} pour ${duration} minutes.\n\n${formattedResponse}`,
               rooms: availableRooms,
               formattedResponse: formattedResponse
             };
@@ -133,7 +140,7 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
 
             const response = {
               success: result.success,
-              message: result.message,
+              message: `${result.message}\n\n${formattedResponse}`,
               formattedResponse: formattedResponse
             };
             console.log("📤 Réponse createBooking:", response);

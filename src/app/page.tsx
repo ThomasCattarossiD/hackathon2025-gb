@@ -3,6 +3,7 @@
 import { useChat } from "@ai-sdk/react"
 import { useEffect, useRef, useState } from "react"
 import { Send, Mic, MapPin, Sparkles, Loader2 } from "lucide-react"
+import ReactMarkdown from "react-markdown"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -77,10 +78,29 @@ export default function ChatPage() {
                 }
               `}
             >
-              <div className="whitespace-pre-wrap leading-relaxed">
+              <div className="leading-relaxed space-y-2">
                 {m.parts?.map((p: any, idx: number) =>
                   p.type === "text" ? (
-                    <span key={idx}>{p.text}</span>
+                    <div
+                      key={idx}
+                      className={`
+                        prose prose-sm max-w-none
+                        [&_strong]:font-semibold
+                        [&_em]:italic
+                        [&_code]:bg-slate-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono
+                        [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-2
+                        [&_ol]:list-decimal [&_ol]:pl-4 [&_ol]:my-2
+                        [&_li]:mb-1
+                        [&_a]:text-blue-600 [&_a]:underline
+                        [&_p]:my-1
+                        ${m.role === "user" 
+                          ? "[&_a]:text-blue-300 [&_strong]:text-white [&_code]:bg-blue-500 [&_code]:text-white" 
+                          : ""
+                        }
+                      `}
+                    >
+                      <ReactMarkdown>{p.text}</ReactMarkdown>
+                    </div>
                   ) : null
                 )}
               </div>
