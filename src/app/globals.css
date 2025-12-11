@@ -120,3 +120,20 @@
     @apply bg-background text-foreground;
   }
 }
+
+html, body {
+  height: 100%; /* Force la hauteur à 100% de l'écran */
+  width: 100%;
+  overflow: hidden; /* Empêche le scroll sur la page globale */
+  overscroll-behavior: none; /* Empêche le "rebond" natif sur mobile */
+  touch-action: manipulation; /* Améliore la réponse au tactile */
+}
+
+/* Optionnel : Pour masquer la scrollbar tout en gardant le scroll fonctionnel */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
