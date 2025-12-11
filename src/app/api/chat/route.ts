@@ -1,5 +1,5 @@
 import { openai } from '@ai-sdk/openai';
-import { streamText, tool } from 'ai';
+import { convertToModelMessages, streamText, tool } from 'ai';
 import { z } from 'zod';
 import { findAvailableRooms, createBooking } from '@/services/bookingService';
 
@@ -36,15 +36,15 @@ export const maxDuration = 30; // Timeout de sécurité (30s)
 
 // Objets Zod pour la validation des paramètres des outils
 const availabilityZodObject = z.object({
-    date: z.string().describe('Date et heure de début au format ISO 8601 (ex: 2026-12-12T14:00:00)'),
-    duration: z.number().describe('Durée en minutes (par défaut 60)'),
-});
+  date: z.string().describe('Date et heure de début au format ISO 8601 (ex: 2026-12-12T14:00:00)'),
+  duration: z.number().int().min(15).describe('Durée en minutes (par défaut 60, minimum 15)'),
+}).describe('Paramètres pour vérifier la disponibilité des salles');
 
 const roomBookingZodObject = z.object({
-    roomName: z.string().describe('Le nom exact de la salle à réserver'),
-    date: z.string().describe('Date et heure de début au format ISO 8601'),
-    duration: z.number().describe('Durée en minutes'),
-});
+  roomName: z.string().describe('Le nom exact de la salle à réserver'),
+  date: z.string().describe('Date et heure de début au format ISO 8601'),
+  duration: z.number().int().min(15).describe('Durée en minutes'),
+}).describe('Paramètres pour réserver une salle');
 
 // 2. AJUSTEMENT DYNAMIQUE DU PROMPT & RÉCUPÉRATION DES MESSAGES
 export async function POST(req: Request) {
@@ -63,14 +63,14 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
   const result = await streamText({
     model: openai('gpt-4o-mini'), // Modèle rapide et efficace
     system: dynamicSystemPrompt,
-    messages,
+    messages: convertToModelMessages(messages),
 
     tools: {
 
       // OUTIL 1 : VÉRIFIER LA DISPONIBILITÉ DES SALLES
       checkAvailability: tool({
         description: 'Vérifie les salles disponibles pour un créneau donné.',
-        parameters: availabilityZodObject,
+        inputSchema: availabilityZodObject,
         execute: async ({ date, duration }) => {
           console.log("🤖 IA Check Dispo :", date, duration + "min");
 
@@ -105,7 +105,7 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
       // OUTIL 2 : RÉSERVER UNE SALLE
       createBooking: tool({
         description: 'Effectue la réservation ferme d\'une salle.',
-        parameters: roomBookingZodObject,
+        inputSchema: roomBookingZodObject,
         execute: async ({ roomName, date, duration }) => {
           console.log("🤖 IA Booking :", roomName, date);
 
@@ -135,5 +135,5 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
   });
 
   // On renvoie le flux (streaming) vers le frontend pour l'effet "machine à écrire"
-  return result.toAIStreamResponse();
+  return result.toTextStreamResponse();
 }
