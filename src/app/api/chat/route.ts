@@ -5,14 +5,21 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { decodeSessionToken } from '@/lib/auth';
 import { cookies } from 'next/headers';
-import { getChatTools } from '@/lib/chat-tools';
+import {
+    findRoomsByCarac,
+    proposeRoomToUser,
+    createMeeting,
+    findRoomsByCaracSchema,
+    proposeRoomToUserSchema,
+    createMeetingSchema,
+} from '@/lib/chatTools';
 
 // Load system prompt
 const systemPrompt = readFileSync(join(process.cwd(), 'prompts/main.md'), 'utf-8');
 
 export async function POST(req: NextRequest) {
     // --- User Authentication ---
-    const cookieStore = cookies();
+    const cookieStore = await cookies();
     const sessionToken = cookieStore.get('session_token')?.value;
 
     if (!sessionToken) {
@@ -26,9 +33,6 @@ export async function POST(req: NextRequest) {
         return new NextResponse('Unauthorized: Invalid session token', { status: 401 });
     }
 
-    // --- Get Tools ---
-    const chatTools = getChatTools(userId);
-
     // --- Main API Logic ---
     const { messages } = await req.json();
 
@@ -36,7 +40,23 @@ export async function POST(req: NextRequest) {
         model: openai('gpt-4o-mini'),
         system: systemPrompt,
         messages,
-        tools: chatTools,
+        tools: {
+            findRoomsByCarac: {
+                description: 'Find and filter available rooms by criteria. Returns a list of available rooms sorted by relevance.',
+                inputSchema: findRoomsByCaracSchema,
+                execute: findRoomsByCarac,
+            },
+            proposeRoomToUser: {
+                description: 'Show full room details and ask for confirmation. Re-verifies availability before proposing.',
+                inputSchema: proposeRoomToUserSchema,
+                execute: proposeRoomToUser,
+            },
+            createMeeting: {
+                description: 'Create the actual booking in the database.',
+                inputSchema: createMeetingSchema,
+                execute: createMeeting,
+            },
+        },
     });
 
     return result.toUIMessageStreamResponse();

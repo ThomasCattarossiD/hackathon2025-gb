@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { CalendarDays, Lock, Users, Zap } from 'lucide-react';
+import ChatInterface from '@/components/chat/ChatInterface';
 
 export default function HomePage() {
   const router = useRouter();
