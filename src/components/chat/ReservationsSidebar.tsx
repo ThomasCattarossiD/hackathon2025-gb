@@ -6,7 +6,6 @@ import {
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
-import { Badge } from "../ui/badge";
 import { Separator } from "../ui/separator";
 import {
   Sheet,
@@ -59,7 +58,7 @@ export default function ReservationsSidebar({ reservations }: ReservationsSideba
             <div className="flex flex-col items-center justify-center h-64 text-center space-y-3 opacity-60">
               <CalendarX size={48} />
               <p className="text-sm font-medium">Aucune réservation en cours.</p>
-              <p className="text-xs">Demandez au chatbot d'en créer une !</p>
+              <p className="text-xs">Demandez au chatbot d&apos;en créer une !</p>
             </div>
           ) : (
             // CAS : LISTE DES RÉSERVATIONS

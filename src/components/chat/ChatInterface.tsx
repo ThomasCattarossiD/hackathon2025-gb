@@ -39,11 +39,6 @@ export default function ChatInterface() {
         id: "chat-interface"
     } as any);
 
-    useEffect(() => {
-        loadUserProfile();
-        loadReservations();
-    }, []);
-
     const loadUserProfile = async () => {
         try {
             const { data: { user } } = await supabase.auth.getUser();
@@ -110,19 +105,19 @@ export default function ChatInterface() {
             }
 
             if (meetings) {
-                const formatted = meetings.map((meeting: any) => ({
-                    id: meeting.id.toString(),
-                    roomName: meeting.rooms?.name || 'Salle inconnue',
-                    date: new Date(meeting.start_time).toLocaleDateString('fr-FR', {
+                const formatted = meetings.map((meeting: Record<string, unknown>) => ({
+                    id: (meeting.id as string).toString(),
+                    roomName: ((meeting.rooms as any)?.name || 'Salle inconnue') as string,
+                    date: new Date(meeting.start_time as string).toLocaleDateString('fr-FR', {
                         day: '2-digit',
                         month: 'short',
                         year: 'numeric'
                     }),
-                    startTime: new Date(meeting.start_time).toLocaleTimeString('fr-FR', {
+                    startTime: new Date(meeting.start_time as string).toLocaleTimeString('fr-FR', {
                         hour: '2-digit',
                         minute: '2-digit'
                     }),
-                    endTime: new Date(meeting.end_time).toLocaleTimeString('fr-FR', {
+                    endTime: new Date(meeting.end_time as string).toLocaleTimeString('fr-FR', {
                         hour: '2-digit',
                         minute: '2-digit'
                     }),
@@ -134,6 +129,11 @@ export default function ChatInterface() {
             console.error('Erreur fetch réservations:', error);
         }
     };
+
+    useEffect(() => {
+        loadUserProfile();
+        loadReservations();
+    }, []);
 
     useEffect(() => {
         if (scrollRef.current) {

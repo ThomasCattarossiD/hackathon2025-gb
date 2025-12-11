@@ -59,7 +59,7 @@ export async function findAvailableRooms(date: string, duration: number, options
       // Filtrer par équipement si spécifié
       if (options?.equipment && options.equipment.length > 0) {
         const roomEquipment = Array.isArray(room.equipment) ? room.equipment : [];
-        const hasAllEquipment = options.equipment.every((eq) =>
+        const hasAllEquipment = options.equipment.every((eq: string) =>
           roomEquipment.some((re: string) => re.toLowerCase().includes(eq.toLowerCase()))
         );
         if (!hasAllEquipment) continue;
@@ -79,7 +79,7 @@ export async function findAvailableRooms(date: string, duration: number, options
 }
 
 // Fonction pour rechercher une salle par localisation
-export async function findRoomByLocation(location: string, date?: string): Promise<any | null> {
+export async function findRoomByLocation(location: string): Promise<any | null> {
   console.log(`Finding room at location: ${location}`);
   
   try {
@@ -146,7 +146,7 @@ export async function createBooking(roomName: string, date: string, duration: nu
     }
 
     // Créer la réservation dans la table meetings
-    const { data: meeting, error: meetingError } = await supabase
+    const { error: meetingError } = await supabase
       .from('meetings')
       .insert([
         {
@@ -168,5 +168,162 @@ export async function createBooking(roomName: string, date: string, duration: nu
   } catch (error) {
     console.error('Erreur create meeting:', error);
     return { success: false, message: 'Erreur système lors de la réservation.' };
+  }
+}
+
+// Fonction pour rechercher une réunion de l'utilisateur par entreprise/société
+export async function findMeetingByCompany(company: string) {
+  console.log(`Finding meeting for company: ${company}`);
+  
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      return { found: false, message: 'Vous devez être connecté.' };
+    }
+
+    const today = new Date().toISOString();
+    
+    // Chercher une réunion de l'utilisateur aujourd'hui avec cette entreprise dans le titre
+    const { data: meetings, error } = await supabase
+      .from('meetings')
+      .select(`
+        id,
+        title,
+        start_time,
+        end_time,
+        room_id,
+        rooms(id, name, capacity, location, equipment)
+      `)
+      .eq('user_id', user.id)
+      .gte('start_time', today)
+      .ilike('title', `%${company}%`)
+      .limit(1);
+
+    if (error) {
+      console.error('Erreur recherche réunion par entreprise:', error);
+      return { found: false, message: 'Erreur lors de la recherche.' };
+    }
+
+    if (!meetings || meetings.length === 0) {
+      return { 
+        found: false, 
+        message: `Aucune réunion trouvée pour l'entreprise "${company}".` 
+      };
+    }
+
+    const meeting = meetings[0];
+    return {
+      found: true,
+      meeting: meeting,
+      message: `Réunion trouvée pour ${company}`
+    };
+  } catch (error) {
+    console.error('Erreur find meeting by company:', error);
+    return { found: false, message: 'Erreur système.' };
+  }
+}
+
+// Fonction pour mettre à jour une réunion
+export async function updateMeeting(meetingId: string, updates: { start_time?: string; end_time?: string; title?: string }) {
+  console.log(`Updating meeting ${meetingId}:`, updates);
+  
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      return { success: false, message: 'Vous devez être connecté.' };
+    }
+
+    // Vérifier que la réunion appartient à l'utilisateur
+    const { data: meeting, error: fetchError } = await supabase
+      .from('meetings')
+      .select('room_id, user_id')
+      .eq('id', meetingId)
+      .single();
+
+    if (fetchError || !meeting) {
+      return { success: false, message: 'Réunion non trouvée.' };
+    }
+
+    if (meeting.user_id !== user.id) {
+      return { success: false, message: 'Vous ne pouvez modifier que vos propres réunions.' };
+    }
+
+    // Si les horaires changent, vérifier les conflits
+    if (updates.start_time && updates.end_time) {
+      // Exclure la réunion actuelle du test de conflit
+      const { data: conflicts, error: conflictError } = await supabase
+        .from('meetings')
+        .select('id')
+        .eq('room_id', meeting.room_id)
+        .neq('id', meetingId)
+        .or(`start_time.lt.${updates.end_time},end_time.gt.${updates.start_time}`)
+        .limit(1);
+
+      if (conflictError) {
+        return { success: false, message: 'Erreur lors de la vérification des conflits.' };
+      }
+
+      if (conflicts && conflicts.length > 0) {
+        return { success: false, message: 'Un conflit d\'horaire existe à ces nouvelles heures.' };
+      }
+    }
+
+    // Effectuer la mise à jour
+    const { error: updateError } = await supabase
+      .from('meetings')
+      .update(updates)
+      .eq('id', meetingId);
+
+    if (updateError) {
+      console.error('Erreur mise à jour réunion:', updateError);
+      return { success: false, message: 'Erreur lors de la mise à jour.' };
+    }
+
+    return { success: true, message: `Réunion mise à jour avec succès !` };
+  } catch (error) {
+    console.error('Erreur update meeting:', error);
+    return { success: false, message: 'Erreur système lors de la mise à jour.' };
+  }
+}
+
+// Fonction pour lister les réunions de l'utilisateur
+export async function getUserMeetings() {
+  console.log(`Fetching user meetings...`);
+  
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      return { meetings: [], message: 'Vous devez être connecté.' };
+    }
+
+    const today = new Date().toISOString();
+    
+    const { data: meetings, error } = await supabase
+      .from('meetings')
+      .select(`
+        id,
+        title,
+        start_time,
+        end_time,
+        room_id,
+        rooms(id, name, location)
+      `)
+      .eq('user_id', user.id)
+      .gte('start_time', today)
+      .order('start_time', { ascending: true })
+      .limit(10);
+
+    if (error) {
+      console.error('Erreur chargement réunions:', error);
+      return { meetings: [], message: 'Erreur lors du chargement.' };
+    }
+
+    return { 
+      meetings: meetings || [], 
+      message: meetings && meetings.length > 0 ? 'Réunions trouvées' : 'Aucune réunion prévue'
+    };
+  } catch (error) {
+    console.error('Erreur get user meetings:', error);
+    return { meetings: [], message: 'Erreur système.' };
   }
 }
