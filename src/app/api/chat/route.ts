@@ -19,19 +19,20 @@ Help employees find and book meeting rooms efficiently.
 4. **Safety:** NEVER confirm a booking without successfully calling the 'createBooking' tool.
 5. **Honesty:** Always use 'checkAvailability' before suggesting a room. Do not guess.
 6. **Fail Gracefully:** If a room is taken, immediately suggest another available room from the list.
-7. **Formatting:** When presenting available rooms to the user, format them clearly with their names, capacity, and equipment.
+7. **Response Format:** When you call a tool and receive a response with a 'formattedResponse' field, ALWAYS use that formatted text to respond to the user. This text is already properly formatted for display.
 
 **WORKFLOWS (IMPORTANT):**
 - **Check Availability:** 
     1. ALWAYS call 'checkAvailability' with the date/time and duration.
-    2. Present the results in a friendly, readable format.
+    2. Use the 'formattedResponse' from the tool result to present the available rooms to the user.
     3. Ask the user which room they prefer if multiple are available.
 - **New Booking:** 
     1. Ask for confirmation from the user before booking.
     2. Call 'createBooking' with the exact room name, date, and duration.
+    3. Use the 'formattedResponse' from the result to confirm the booking status to the user.
 
 **TONE:**
-Professional, concise, helpful. Short answers are better for mobile users. Use emojis sparingly.
+Professional, concise, helpful. Short answers are better for mobile users. Use emojis when provided in formatted responses.
 `;
 export const maxDuration = 30; // Timeout de sécurité (30s)
 
@@ -77,34 +78,39 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
 
           try {
             const availableRooms = await findAvailableRooms(date, duration);
+            console.log("📦 Rooms trouvées :", availableRooms);
 
             if (!availableRooms || availableRooms.length === 0) {
-              return {
+              const response = {
                 available: false,
-                message: "Aucune salle n'est libre à cet horaire. Demande à l'utilisateur s'il veut changer d'heure ou de durée.",
-                rooms: []
+                message: "❌ Aucune salle n'est libre à cet horaire. Demande à l'utilisateur s'il veut changer d'heure ou de durée.",
+                rooms: [],
+                formattedResponse: "Aucune salle disponible à cet horaire."
               };
+              console.log("📤 Réponse checkAvailability (vide):", response);
+              return response;
             }
 
-            // Format lisible pour l'IA
-            const roomsList = availableRooms.map(r => ({
-              name: r.name,
-              capacity: r.capacity,
-              equipment: r.equipment || []
-            }));
-
-            return {
+            // Format lisible pour l'IA avec le formatter
+            const formattedResponse = formatRoomsResponse(availableRooms);
+            const response = {
               available: true,
               message: `${availableRooms.length} salle(s) disponible(s) à ${date} pour ${duration} minutes.`,
-              rooms: roomsList
+              rooms: availableRooms,
+              formattedResponse: formattedResponse
             };
+            console.log("📤 Réponse checkAvailability:", response);
+            return response;
           } catch (error) {
-            console.error('Erreur check availability:', error);
-            return {
+            console.error('❌ Erreur check availability:', error);
+            const response = {
               available: false,
               error: true,
-              message: "Erreur lors de la vérification de la disponibilité."
+              message: "❌ Erreur lors de la vérification de la disponibilité.",
+              formattedResponse: "Une erreur est survenue. Veuillez réessayer."
             };
+            console.log("📤 Réponse checkAvailability (erreur):", response);
+            return response;
           }
         },
       }),
@@ -114,21 +120,37 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
         description: 'Effectue la réservation ferme d\'une salle.',
         inputSchema: roomBookingZodObject,
         execute: async ({ roomName, date, duration }) => {
-          console.log("🤖 IA Booking :", roomName, date);
+          console.log("🤖 IA Booking :", roomName, date, duration + "min");
 
           try {
             const result = await createBooking(roomName, date, duration);
+            console.log("📦 Résultat booking :", result);
 
-            return {
+            // Utiliser le formatter pour les messages de succès/erreur
+            const formattedResponse = result.success
+              ? formatBookingSuccess(roomName, date, duration)
+              : formatBookingError(roomName, result.message);
+
+            const response = {
               success: result.success,
-              message: result.message
+              message: result.message,
+              formattedResponse: formattedResponse
             };
+            console.log("📤 Réponse createBooking:", response);
+            return response;
           } catch (error) {
-            console.error('Erreur create booking:', error);
-            return {
+            console.error('❌ Erreur create booking:', error);
+            const formattedResponse = formatBookingError(
+              roomName,
+              'Une erreur système est survenue.'
+            );
+            const response = {
               success: false,
-              message: "Erreur système lors de la réservation."
+              message: "Erreur système lors de la réservation.",
+              formattedResponse: formattedResponse
             };
+            console.log("📤 Réponse createBooking (erreur):", response);
+            return response;
           }
         },
       }),
@@ -136,6 +158,6 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
   });
 
   // On renvoie le flux (streaming) vers le frontend pour l'effet "machine à écrire"
-  console.log("🤖 Réponse IA en streaming...", result);
+  console.log("🤖 Réponse IA en streaming initialisée...");
   return result.toUIMessageStreamResponse();
 }
