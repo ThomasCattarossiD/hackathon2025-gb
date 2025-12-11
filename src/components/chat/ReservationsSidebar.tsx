@@ -40,7 +40,7 @@ export default function ReservationsSidebar({ reservations }: ReservationsSideba
       <SheetTrigger asChild>
         {/* Le bouton Menu est géré ici directement */}
         <Button variant="ghost" size="icon" className="-ml-2">
-          <Menu size={24} />
+          <Menu className="!h-6 !w-6" />
         </Button>
       </SheetTrigger>
       

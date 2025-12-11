@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import React, { useState, useRef, useEffect } from "react";
-import { Send, Mic, Bot, User, Loader2 } from "lucide-react";
+import { Send, Mic, Bot, Volume2, VolumeX, User, StopCircle, ArrowDown } from "lucide-react"; // Assure-toi d'avoir lucide-react
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
@@ -10,7 +10,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import ReactMarkdown from "react-markdown";
 import ReservationsSidebar, { Reservation } from "./ReservationsSidebar";
-import { supabase } from "@/lib/supabaseClient";
+import { Separator } from "../ui/separator";
+
 
 declare global {
   interface Window {
@@ -33,6 +34,12 @@ interface ChatInterfaceProps {
 export default function ChatInterface({ userId }: ChatInterfaceProps) {
     const [input, setInput] = useState("");
     const [isRecording, setIsRecording] = useState(false);
+    const [isSoundEnabled, setIsSoundEnabled] = useState(true);
+    const [isSpeaking, setIsSpeaking] = useState(false);
+    const [showScrollButton, setShowScrollButton] = useState(false);
+
+    const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+
     const scrollRef = useRef<HTMLDivElement>(null);
     const recognitionRef = useRef<any>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -180,6 +187,20 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
         }
     }, [messages]);
 
+    useEffect(() => {
+        const loadVoices = () => {
+            const availableVoices = window.speechSynthesis.getVoices();
+            setVoices(availableVoices);
+        };
+
+        loadVoices();
+        
+        // Chrome charge les voix de manière asynchrone, on s'abonne à l'événement
+        if (window.speechSynthesis.onvoiceschanged !== undefined) {
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+        }
+    }, []);
+
     const handleSend = () => {
         if (!input.trim()) return;
         sendMessage({ text: input });
@@ -200,6 +221,8 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
             alert("Votre navigateur ne supporte pas la reconnaissance vocale.");
             return;
         }
+        
+        setIsSoundEnabled(true); 
 
         const recognition = new SpeechRecognition();
         recognition.lang = "fr-FR";
@@ -228,6 +251,83 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
         setIsRecording(true);
     };
 
+    const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+        // Si on est remonté de plus de 100px par rapport au bas, on affiche le bouton
+        const isBottom = scrollHeight - scrollTop - clientHeight < 100;
+        setShowScrollButton(!isBottom);
+    };
+
+    const scrollToBottom = () => {
+      scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+      // Optionnel : on cache le bouton tout de suite après le clic
+      setShowScrollButton(false);
+    };
+
+    const speakText = (text: string) => {
+        if (!isSoundEnabled) return; 
+
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(text);
+
+        // --- LOGIQUE VOIX NATURELLE ---
+        // 1. On filtre les voix françaises
+        const frenchVoices = voices.filter(voice => voice.lang.includes('fr'));
+
+        // 2. On cherche en priorité une voix "Google" ou "Natural" (Edge)
+        let preferredVoice = frenchVoices.find(voice => 
+            voice.name.includes("Google") || 
+            voice.name.includes("Natural") || 
+            voice.name.includes("Premium")
+        );
+
+        // 3. Fallback : si pas de voix "premium", on prend la première voix FR dispo
+        if (!preferredVoice && frenchVoices.length > 0) {
+            preferredVoice = frenchVoices[0];
+        }
+
+        if (preferredVoice) {
+            utterance.voice = preferredVoice;
+        }
+        // ------------------------------
+
+        utterance.lang = "fr-FR"; 
+        utterance.rate = 1; // Une vitesse de 1.1 est souvent plus naturelle et moins "traînante"
+        utterance.pitch = 1; 
+
+        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onend = () => setIsSpeaking(false);
+        utterance.onerror = () => setIsSpeaking(false);
+
+        window.speechSynthesis.speak(utterance);
+    };  
+
+    const stopSpeaking = () => {
+        window.speechSynthesis.cancel();
+        setIsSpeaking(false);
+        setIsSoundEnabled(false);
+    };
+
+    const handleReject = (messageId: string) => {
+        setMessages((prevMessages) =>
+            prevMessages.map((msg) =>
+                msg.id === messageId ? { ...msg, actionStatus: "rejected" } : msg
+            )
+        );
+        alert("Salle refusé");
+
+    };
+
+    const handleConfirm = (messageId: string) => {
+        setMessages((prevMessages) =>
+            prevMessages.map((msg) =>
+                msg.id === messageId ? { ...msg, actionStatus: "accepted" } : msg
+            )
+        );
+        alert("Salle réservée");
+    };
+
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === "Enter") {
             handleSend();
@@ -237,16 +337,17 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
   return (
     <div className="flex flex-col h-[100dvh] bg-background text-foreground md:w-[30%] mx-auto">
       
-      {/* HEADER */}
-      <div className="relative flex items-center justify-center p-4 border-b bg-card/50 backdrop-blur-sm sticky top-0 z-10">
+      {/* 2. HEADER (Fixe) */}
+      {/* shrink-0 empêche le header de s'écraser si manque de place */}
+      <div className="shrink-0 flex items-center justify-center p-4 border-b bg-card/50 backdrop-blur-sm z-10 relative">
         
-        {/* GAUCHE : Menu Réservations */}
+        {/* Menu Gauche */}
         <div className="absolute left-4 inset-y-0 flex items-center">
           <ReservationsSidebar reservations={reservations} />
         </div>
 
-        {/* Titre centré */}
-        <h1 className="text-lg font-semibold tracking-tight">RoomBarber</h1>
+        {/* Titre */}
+        <h1 className="text-3xl font-semibold tracking-tight">RoomBarber</h1>
 
         {/* Bouton Profil */}
         <div className="absolute right-4 inset-y-0 flex items-center">
@@ -300,8 +401,11 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
         </div>
       </div>
 
-      {/* ZONE DE MESSAGES */}
-      <ScrollArea className="flex-1 p-4">
+      {/* 3. ZONE DE MESSAGES (Scrollable) */}
+      <div 
+        className="flex-1 w-full p-4 overflow-y-auto scroll-smooth" 
+        onScroll={handleScroll}
+      >
         <div className="space-y-4 pb-4">
           {messages
             .filter((message) => {
@@ -390,62 +494,51 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
               </div>
             </div>
           ))}
-
-          {/* Loading Indicator */}
-          {status === "streaming" && messages[messages.length - 1]?.role === "user" && (
-            <div className="flex justify-start">
-              <div className="bg-muted text-muted-foreground px-4 py-3 rounded-2xl rounded-bl-none shadow-sm flex items-center gap-1">
-                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span>
-              </div>
-            </div>
-          )}
-
-          {/* Scroll anchor */}
+          {/* Div pour scroll auto */}
           <div ref={scrollRef} />
         </div>
-      </ScrollArea>
+      </div>
 
-      {/* BARRE D'INPUT */}
-      <div className="p-6 bg-background border-t sticky bottom-0 z-10">
-        <div className="flex items-center gap-2">
-          
-          {/* Bouton Vocal */}
-          <Button
-            variant={isRecording ? "destructive" : "outline"}
-            size="icon"
-            className="rounded-full shrink-0"
-            onClick={handleVoiceRecord}
-          >
-            <Mic size={20} className={isRecording ? "animate-pulse" : ""} />
+      {/* 4. FOOTER (Fixe) */}
+      {/* shrink-0 : Empêche le footer de disparaître */}
+      <div className="shrink-0 py-2 px-4 bg-background border-t z-10 relative">
+        
+        {isSpeaking && (
+            <div className="absolute -top-14 left-0 right-0 flex justify-center z-20 pointer-events-none">
+                <Button variant="secondary" size="sm" className="shadow-lg bg-background/90 backdrop-blur border border-primary/20 text-primary animate-in fade-in slide-in-from-bottom-2 pointer-events-auto gap-2 rounded-full pr-4 pl-3" onClick={stopSpeaking}>
+                     <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span></span>
+                    <span className="text-sm font-semibold">L'IA parle... (Couper)</span>
+                    <StopCircle size={16} />
+                </Button>
+            </div>
+        )}
+
+        {showScrollButton && (
+            <div className="absolute -top-14 right-4 z-20">
+                <Button 
+                    variant="outline" 
+                    size="icon" 
+                    className="rounded-full h-10 w-10 shadow-md bg-background/80 backdrop-blur border border-border animate-in zoom-in-50" 
+                    onClick={scrollToBottom}
+                >
+                    <ArrowDown size={20} className="text-muted-foreground" />
+                    <span className="sr-only">Voir les nouveaux messages</span>
+                </Button>
+            </div>
+        )}
+
+        <div className="flex items-center gap-3 py-4">
+            <Button variant={isRecording ? "destructive" : "outline"} size="icon" className="rounded-full shrink-0 h-12 w-12" onClick={handleVoiceRecord}>
+            <Mic className={`!h-7 !w-7 ${isRecording ? "animate-pulse" : ""}`} />
             <span className="sr-only">Reconnaissance vocale</span>
-          </Button>
+            </Button>
 
-          {/* Champ Texte */}
-          <Input
-            className="flex-1 rounded-full bg-muted/50 border-0 focus-visible:ring-1 focus-visible:ring-primary"
-            placeholder="Écrivez votre message..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={status === "streaming"}
-          />
+            <Input className="flex-1 rounded-full bg-muted/50 border-0 focus-visible:ring-1 focus-visible:ring-primary h-12 px-5 text-base" placeholder="Écrivez votre message..." value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}/>
 
-          {/* Bouton Envoyer */}
-          <Button 
-            size="icon" 
-            className="rounded-full shrink-0" 
-            onClick={handleSend}
-            disabled={!input.trim() || status === "streaming"}
-          >
-            {status === "streaming" ? (
-              <Loader2 size={18} className="animate-spin" />
-            ) : (
-              <Send size={18} />
-            )}
+            <Button size="icon" className="rounded-full shrink-0 h-12 w-12 disabled:bg-gray-400" onClick={handleSend} disabled={!input.trim()} variant={"custom"}>
+            <Send className="!h-7 !w-7" />
             <span className="sr-only">Envoyer</span>
-          </Button>
+            </Button>
         </div>
       </div>
     </div>
