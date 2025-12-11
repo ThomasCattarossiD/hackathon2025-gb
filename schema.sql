@@ -5,12 +5,15 @@ DROP TABLE IF EXISTS public.users CASCADE;
 
 -- 1. Création de la table UTILISATEURS (Ref: Ton code)
 CREATE TABLE public.users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(), -- J'ai ajouté un générateur d'ID par défaut
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   full_name TEXT NOT NULL,
   email TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
   society TEXT,
   pmr_needed BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT timezone('utc', now())
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT timezone('utc', now()),
+  updated_at TIMESTAMPTZ DEFAULT timezone('utc', now())
 );
 
 -- 2. Création de la table SALLES (Ref: Ton code)

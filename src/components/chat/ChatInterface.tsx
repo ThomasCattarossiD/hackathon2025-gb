@@ -1,5 +1,6 @@
 "use client";
 
+import { useChat } from "@ai-sdk/react";
 import React, { useState, useRef, useEffect } from "react";
 import { Send, Mic, Bot, Volume2, VolumeX, User, StopCircle, ArrowDown } from "lucide-react"; // Assure-toi d'avoir lucide-react
 import { Button } from "../ui/button";
@@ -7,12 +8,11 @@ import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import { Card } from "../ui/card";
+import ReactMarkdown from "react-markdown";
 import ReservationsSidebar, { Reservation } from "./ReservationsSidebar";
 import { Separator } from "../ui/separator";
 
 
-// Extension de l'interface Window pour la reconnaissance vocale
 declare global {
   interface Window {
     webkitSpeechRecognition: any;
@@ -20,25 +20,18 @@ declare global {
   }
 }
 
-// Type simple pour un message
-type Message = {
-    id: string;
-    role: "user" | "bot";
-    content: string;
-    salleProp: string | null;
-    timestamp: Date;
-    actionStatus?: "accepted" | "rejected"; 
-};
-
-type RoomDetails = {
-    id: string;
+type UserProfile = {
     name: string;
-    capacity: number;
-    features: string[];
-    imageUrl?: string;
+    email: string;
+    avatarUrl: string;
+    role: string;
 };
 
-export default function ChatInterface() {
+interface ChatInterfaceProps {
+    userId?: string;
+}
+
+export default function ChatInterface({ userId }: ChatInterfaceProps) {
     const [input, setInput] = useState("");
     const [isRecording, setIsRecording] = useState(false);
     const [isSoundEnabled, setIsSoundEnabled] = useState(true);
@@ -48,66 +41,149 @@ export default function ChatInterface() {
     const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
     const scrollRef = useRef<HTMLDivElement>(null);
+    const recognitionRef = useRef<any>(null);
+    const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+    const [reservations, setReservations] = useState<Reservation[]>([]);
 
-    const recognitionRef = useRef<any>(null); 
+    const { messages, sendMessage, status } = useChat({
+        api: "/api/chat",
+        id: "chat-interface"
+    } as any);
 
-  // Exemple de données initiales
-    const [messages, setMessages] = useState<Message[]>([
-        {
-        id: "1",
-        role: "bot",
-        content: "Bonjour ! Je suis votre assistant virtuel. Comment puis-je vous aider aujourd'hui ?",
-        salleProp: null,
-        timestamp: new Date(),
-        },
-    ]);
-
-    const userProfile = {
-        name: "John Doe",
-        email: "john.doe@gb.com",
-        avatarUrl: "https://github.com/shadcn.png",
-        role: "Développeur junior"
-    };
-
-    const reservations: Reservation[] = [
-        // Sera remplacé par un appel à la BD pour connaitre les réservations de l'user à partir de la date courante
-        {
-            id: "1",
-            roomName: "Salle Turing",
-            date: "12 Dec. 2025",
-            startTime: "10:00",
-            endTime: "11:30",
-            status: "confirmé"
-        },
-        {
-            id: "2",
-            roomName: "Salle Lovelace",
-            date: "14 Dec. 2025",
-            startTime: "14:00",
-            endTime: "15:00",
-            status: "en attente"
-        }
-    ];
-
-    const ROOM_DATABASE: Record<string, RoomDetails> = {
-        "room-123": {
-            id: "room-123",
-            name: "Salle Alan Turing",
-            capacity: 6,
-            features: ["wifi", "projector", "whiteboard"],
-        },
-        "room-456": {
-            id: "room-456",
-            name: "Salle Ada Lovelace",
-            capacity: 12,
-            features: ["wifi", "screen", "ac"],
+    const loadUserProfile = async () => {
+        try {
+            // Récupérer l'utilisateur depuis notre système d'authentification (session_token)
+            const res = await fetch('/api/auth/me');
+            if (!res.ok) {
+                setUserProfile({
+                    name: "Utilisateur",
+                    email: "user@goodbarber.com",
+                    avatarUrl: "https://github.com/shadcn.png",
+                    role: "Employé GoodBarber"
+                });
+                return;
+            }
+            
+            const authData = await res.json();
+            if (authData.user) {
+                setUserProfile({
+                    name: authData.user.fullName || authData.user.email.split('@')[0],
+                    email: authData.user.email,
+                    avatarUrl: "https://github.com/shadcn.png",
+                    role: authData.user.society || "Employé GoodBarber"
+                });
+            }
+        } catch (error) {
+            console.error('Erreur chargement profil:', error);
+            setUserProfile({
+                name: "Utilisateur",
+                email: "user@goodbarber.com",
+                avatarUrl: "https://github.com/shadcn.png",
+                role: "Employé GoodBarber"
+            });
         }
     };
 
-    // Fonction pour scroller automatiquement vers le bas à chaque nouveau message
+    const loadReservations = async () => {
+        try {
+            // Récupérer l'utilisateur depuis le session_token
+            const res = await fetch('/api/auth/me');
+            if (!res.ok) {
+                setReservations([]);
+                return;
+            }
+            
+            const authData = await res.json();
+            if (!authData.user?.id) {
+                setReservations([]);
+                return;
+            }
+
+            const today = new Date().toISOString();
+            const { data: meetings, error } = await supabase
+                .from('meetings')
+                .select(`
+                    id,
+                    title,
+                    start_time,
+                    end_time,
+                    rooms(name)
+                `)
+                .eq('user_id', authData.user.id)
+                .gte('start_time', today)
+                .order('start_time', { ascending: true })
+                .limit(10);
+
+            if (error) {
+                console.error('Erreur chargement réservations:', error);
+                return;
+            }
+
+            if (meetings) {
+                const formatted = meetings.map((meeting: Record<string, unknown>) => {
+                    // Convertir les dates UTC en heure locale Paris (UTC+1)
+                    const startUTC = new Date(meeting.start_time as string);
+                    const endUTC = new Date(meeting.end_time as string);
+                    
+                    return {
+                        id: (meeting.id as string).toString(),
+                        roomName: ((meeting.rooms as any)?.name || 'Salle inconnue') as string,
+                        date: startUTC.toLocaleDateString('fr-FR', {
+                            day: '2-digit',
+                            month: 'short',
+                            year: 'numeric',
+                            timeZone: 'Europe/Paris'
+                        }),
+                        startTime: startUTC.toLocaleTimeString('fr-FR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            timeZone: 'Europe/Paris'
+                        }),
+                        endTime: endUTC.toLocaleTimeString('fr-FR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            timeZone: 'Europe/Paris'
+                        }),
+                        status: 'confirmé' as const
+                    };
+                });
+                setReservations(formatted);
+                console.log('✅ Réservations chargées:', formatted.length);
+            }
+        } catch (error) {
+            console.error('Erreur fetch réservations:', error);
+        }
+    };
+
+    useEffect(() => {
+        loadUserProfile();
+        loadReservations();
+    }, []);
+
     useEffect(() => {
         if (scrollRef.current) {
-        scrollRef.current.scrollIntoView({ behavior: "smooth" });
+            scrollRef.current.scrollIntoView({ behavior: "smooth" });
+        }
+        
+        // Debug logging pour voir la structure des messages
+        if (messages.length > 0) {
+            const lastMessage = messages[messages.length - 1];
+            console.log('📩 Dernier message:', {
+                role: lastMessage.role,
+                id: lastMessage.id,
+                partsLength: lastMessage.parts?.length
+            });
+        }
+    }, [messages]);
+
+    // Rafraîchir les réservations après chaque message (pour détecter les nouvelles réservations)
+    useEffect(() => {
+        if (messages.length > 0) {
+            // Attendre un peu pour laisser le temps au backend de traiter la réservation
+            const timer = setTimeout(() => {
+                loadReservations();
+            }, 1000);
+            return () => clearTimeout(timer);
         }
     }, [messages]);
 
@@ -127,36 +203,11 @@ export default function ChatInterface() {
 
     const handleSend = () => {
         if (!input.trim()) return;
-
-        // 1. Ajouter le message de l'utilisateur
-        const userMsg: Message = {
-        id: Date.now().toString(),
-        role: "user",
-        content: input,
-        salleProp: null,
-        timestamp: new Date(),
-        };
-
-        setMessages((prev) => [...prev, userMsg]);
+        sendMessage({ text: input });
         setInput("");
-
-        // 2. Simuler une réponse du bot (à remplacer par ton appel API)
-        setTimeout(() => {
-          const botMsg: Message = {
-              id: (Date.now() + 1).toString(),
-              role: "bot",
-              content: "Ceci est une réponse simulée. J'attends votre logique backend !",
-              salleProp: "room-123",
-              timestamp: new Date(),
-          };
-          setMessages((prev) => [...prev, botMsg]);
-
-          speakText(botMsg.content); 
-        }, 100);
     };
 
     const handleVoiceRecord = () => {
-        // Si on enregistre déjà, on arrête tout
         if (isRecording) {
             if (recognitionRef.current) {
                 recognitionRef.current.stop();
@@ -165,7 +216,6 @@ export default function ChatInterface() {
             return;
         }
 
-        // Vérification de la compatibilité du navigateur
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
             alert("Votre navigateur ne supporte pas la reconnaissance vocale.");
@@ -174,34 +224,28 @@ export default function ChatInterface() {
         
         setIsSoundEnabled(true); 
 
-        // Création de l'instance
         const recognition = new SpeechRecognition();
-        recognition.lang = "fr-FR"; // Langue française
-        recognition.continuous = true; // Arrête après une phrase (mettre true pour dictée continue)
-        recognition.interimResults = false; // Permet de voir le texte s'écrire pendant qu'on parle
+        recognition.lang = "fr-FR";
+        recognition.continuous = false;
+        recognition.interimResults = false;
 
-        // Événement quand le résultat change
         recognition.onresult = (event: any) => {
             let transcript = "";
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 transcript += event.results[i][0].transcript;
             }
-            // Mise à jour de l'input avec le texte dicté
             setInput(transcript);
         };
 
-        // Gestion des erreurs
         recognition.onerror = (event: any) => {
             console.error("Erreur reconnaissance vocale :", event.error);
             setIsRecording(false);
         };
 
-        // Quand l'enregistrement s'arrête (automatiquement ou manuellement)
         recognition.onend = () => {
             setIsRecording(false);
         };
 
-        // Démarrage
         recognitionRef.current = recognition;
         recognition.start();
         setIsRecording(true);
@@ -286,15 +330,12 @@ export default function ChatInterface() {
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === "Enter") {
-        handleSend();
+            handleSend();
         }
     };
 
   return (
-    // 1. CONTAINER PRINCIPAL
-    // h-full : Prend 100% de la hauteur définie dans page.tsx
-    // flex-col : Organise les éléments verticalement
-    <div className="flex flex-col h-full w-full md:w-[30%] bg-background text-foreground shadow-2xl relative">
+    <div className="flex flex-col h-[100dvh] bg-background text-foreground md:w-[30%] mx-auto">
       
       {/* 2. HEADER (Fixe) */}
       {/* shrink-0 empêche le header de s'écraser si manque de place */}
@@ -302,51 +343,61 @@ export default function ChatInterface() {
         
         {/* Menu Gauche */}
         <div className="absolute left-4 inset-y-0 flex items-center">
-            <ReservationsSidebar reservations={reservations} />
+          <ReservationsSidebar reservations={reservations} />
         </div>
 
         {/* Titre */}
         <h1 className="text-3xl font-semibold tracking-tight">RoomBarber</h1>
 
-        {/* Profil Droite */}
+        {/* Bouton Profil */}
         <div className="absolute right-4 inset-y-0 flex items-center">
-            <Popover>
-                <PopoverTrigger asChild>
-                <Button variant="ghost" size="icon" className="rounded-full h-12 w-12 bg-muted p-0">
-                    <Avatar className="h-12 w-12">
-                    <AvatarImage src={userProfile.avatarUrl} alt={userProfile.name} className="object-cover" />
-                    <AvatarFallback><User size={24} /></AvatarFallback>
-                    </Avatar>
-                </Button>
-                </PopoverTrigger>
-                
-                <PopoverContent className="w-80 mr-4" align="end">
-                  {/* ... Ton contenu Popover (copie-colle ton code existant ici) ... */}
-                  <div className="grid gap-4">
-                        <div className="space-y-2"><h4 className="font-medium leading-none text-muted-foreground">Mon Compte</h4></div>
-                        <div className="grid gap-2">
-                            <div className="flex items-center gap-4 p-3 border rounded-lg bg-muted/20">
-                                <Avatar className="h-12 w-12 border-2 border-background shadow-sm">
-                                <AvatarImage src={userProfile.avatarUrl} />
-                                <AvatarFallback>TA</AvatarFallback>
-                                </Avatar>
-                                <div className="flex flex-col">
-                                <span className="font-semibold text-sm flex items-center gap-1">{userProfile.name}</span>
-                                <span className="text-xs text-muted-foreground flex items-center gap-1">{userProfile.role}</span>
-                                <span className="text-xs text-muted-foreground flex items-center gap-1">{userProfile.email}</span>
-                                </div>
-                            </div>
-                            <div className="flex items-center justify-between p-3 border rounded-lg">
-                                <div className="flex items-center gap-2">
-                                    {isSoundEnabled ? <Volume2 size={18} className="text-primary"/> : <VolumeX size={18} className="text-muted-foreground"/>}
-                                    <span className="text-sm font-medium">Réponses vocales</span>
-                                </div>
-                                <input type="checkbox" className="toggle-checkbox h-5 w-5 accent-primary cursor-pointer" checked={isSoundEnabled} onChange={(e) => setIsSoundEnabled(e.target.checked)}/>
-                            </div>
-                        </div>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full h-8 w-8 bg-muted p-0">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage
+                    src={userProfile?.avatarUrl || "https://github.com/shadcn.png"}
+                    alt={userProfile?.name || "Utilisateur"}
+                    className="object-cover"
+                  />
+                  <AvatarFallback><User size={16} /></AvatarFallback>
+                </Avatar>
+              </Button>
+            </PopoverTrigger>
+
+            {userProfile && (
+              <PopoverContent className="w-80 mr-4" align="end">
+                <div className="grid gap-4">
+                  <div className="space-y-2">
+                    <h4 className="font-medium leading-none text-muted-foreground">Mon Compte</h4>
                   </div>
-                </PopoverContent>
-            </Popover>
+                  
+                  <div className="grid gap-2">
+                    <div className="flex items-center gap-4 p-3 border rounded-lg bg-muted/20">
+                      <Avatar className="h-12 w-12 border-2 border-background shadow-sm">
+                        <AvatarImage src={userProfile.avatarUrl} />
+                        <AvatarFallback>GB</AvatarFallback>
+                      </Avatar>
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-sm flex items-center gap-1">
+                          {userProfile.name}
+                        </span>
+                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                          {userProfile.role}
+                        </span>
+                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                          {userProfile.email}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </PopoverContent>
+            )}
+          </Popover>
         </div>
       </div>
 
@@ -356,32 +407,89 @@ export default function ChatInterface() {
         onScroll={handleScroll}
       >
         <div className="space-y-4 pb-4">
-          {messages.map((message) => (
-            <div key={message.id} className={`flex w-full ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div className={`flex max-w-[85%] md:max-w-[70%] items-end gap-2 ${message.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+          {messages
+            .filter((message) => {
+              // Toujours afficher les messages utilisateur
+              if (message.role === "user") return true;
+              
+              // Pour les messages assistant : vérifier qu'il y a du contenu
+              if (!message.parts || message.parts.length === 0) return false;
+              
+              // Afficher si :
+              // 1) Il y a du texte normal
+              const hasText = message.parts.some(
+                (part: any) => part.type === "text" && part.text?.trim().length > 0
+              );
+              
+              // 2) OU il y a un résultat de tool avec du texte
+              const hasToolOutput = message.parts.some(
+                (part: any) => part.type?.startsWith("tool-") && part.output?.text?.trim().length > 0
+              );
+              
+              return hasText || hasToolOutput;
+            })
+            .map((message) => (
+            <div
+              key={message.id}
+              className={`flex w-full ${
+                message.role === "user" ? "justify-end" : "justify-start"
+              }`}
+            >
+              <div
+                className={`flex max-w-[85%] md:max-w-[70%] items-end gap-2 ${
+                  message.role === "user" ? "flex-row-reverse" : "flex-row"
+                }`}
+              >
+                {/* Avatar */}
                 <Avatar className="h-8 w-8 shrink-0">
-                        <AvatarFallback className={message.role === "bot" ? "bg-gradient-to-br from-[#fe6c75] to-pink-500 text-white shadow-lg" : ""}>
-
-                      {message.role === "bot" ? <Bot size={16} /> : <User size={16} />}
+                  <AvatarFallback className={message.role === "assistant" ? "bg-primary text-primary-foreground" : ""}>
+                    {message.role === "assistant" ? <Bot size={16} /> : <User size={16} />}
                   </AvatarFallback>
                 </Avatar>
 
-                <div className={`p-3 rounded-2xl text-sm leading-relaxed shadow-sm ${message.role === "user" ? "bg-primary text-primary-foreground rounded-br-none" : "bg-muted text-muted-foreground rounded-bl-none"}`}>
-                  {message.content}
-                  
-                  {/* Boutons Actions */}
-                  {message.salleProp && !message.actionStatus && (
-                    <>
-                      <Separator className="my-2 bg-muted-foreground/30" />
-                      <div className="mt-2 flex items-center gap-3 justify-end">
-                        <Button variant="outline" className="h-10 px-5 text-sm font-medium border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 bg-background/50" onClick={() => handleReject(message.id)}>Rejeter</Button>
-                        <Button className="h-10 px-5 text-sm font-medium bg-green-600 hover:bg-green-700 text-white border-0 shadow-md" onClick={() => handleConfirm(message.id)}>Valider</Button>
-                      </div>
-                    </>
+                {/* Bulle de message */}
+                <div
+                  className={`p-3 rounded-2xl text-sm leading-relaxed shadow-sm max-w-full ${
+                    message.role === "user"
+                      ? "bg-primary text-primary-foreground rounded-br-none"
+                      : "bg-muted text-muted-foreground rounded-bl-none"
+                  }`}
+                >
+                  {/* Afficher le texte ET les résultats des tools */}
+                  {message.parts && message.parts.length > 0 && (
+                    <div
+                      className={`prose prose-sm max-w-none
+                        [&_strong]:font-semibold
+                        [&_em]:italic
+                        [&_code]:bg-slate-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono
+                        [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-2
+                        [&_ol]:list-decimal [&_ol]:pl-4 [&_ol]:my-2
+                        [&_li]:mb-1
+                        [&_a]:text-blue-600 [&_a]:underline
+                        [&_p]:my-1
+                        ${message.role === "user" 
+                          ? "[&_a]:text-blue-300 [&_strong]:text-white [&_code]:bg-blue-500 [&_code]:text-white" 
+                          : ""
+                        }
+                      `}
+                    >
+                      {message.parts
+                        .map((part: any, idx: number) => {
+                          // Afficher les parties texte normales
+                          if (part.type === "text") {
+                            return <ReactMarkdown key={idx}>{part.text}</ReactMarkdown>;
+                          }
+                          
+                          // Afficher les résultats des tool calls (checkAvailability, createBooking, etc.)
+                          if (part.type?.startsWith("tool-") && part.output?.text) {
+                            return <ReactMarkdown key={idx}>{part.output.text}</ReactMarkdown>;
+                          }
+                          
+                          return null;
+                        })
+                        .filter(Boolean)}
+                    </div>
                   )}
-
-                  {message.actionStatus === "accepted" && <div className=" mt-2 flex items-center gap-2 text-green-700 font-medium text-xs bg-green-100/50 px-3 py-1.5 rounded-md border border-green-200"><span>Salle acceptée</span></div>}
-                  {message.actionStatus === "rejected" && <div className="mt-2 flex items-center gap-2 text-red-700 font-medium text-xs bg-red-100/50 px-3 py-1.5 rounded-md border border-red-200"><span>Salle refusée</span></div>}
                 </div>
               </div>
             </div>
