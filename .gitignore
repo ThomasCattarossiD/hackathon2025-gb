@@ -46,3 +46,6 @@ next-env.d.ts
 
 # Supabase
 supabase/functions/**/.env
+
+# copilot instructions
+copilot-instructions.md
