@@ -22,6 +22,112 @@ async function hasMeetingConflict(roomId: number, startTime: string, endTime: st
   }
 }
 
+// ==========================================
+// NOUVELLES FONCTIONS SIMPLIFIÉES
+// ==========================================
+
+/**
+ * OUTIL 1 : Vérifie si une salle spécifique est disponible
+ * @param roomId ID de la salle
+ * @param startTime Date/heure de début (ISO 8601)
+ * @param duration Durée en minutes
+ */
+export async function checkRoomAvailability(roomId: string, startTime: string, duration: number) {
+  console.log(`🔍 Checking availability for room ${roomId} on ${startTime} for ${duration}min`);
+
+  try {
+    const startDate = new Date(startTime);
+    const endDate = new Date(startDate.getTime() + duration * 60000);
+
+    // Récupérer la salle
+    const { data: room, error: roomError } = await supabase
+      .from('rooms')
+      .select('*')
+      .eq('id', roomId)
+      .single();
+
+    if (roomError || !room) {
+      console.error('❌ Salle non trouvée:', roomError);
+      return { available: false, room: null };
+    }
+
+    // Vérifier les conflits
+    const hasConflict = await hasMeetingConflict(room.id, startDate.toISOString(), endDate.toISOString());
+
+    if (hasConflict) {
+      console.log('❌ Conflit horaire trouvé');
+      return { available: false, room };
+    }
+
+    console.log('✅ Salle disponible:', room.name);
+    return { available: true, room };
+  } catch (error) {
+    console.error('❌ Erreur checkRoomAvailability:', error);
+    return { available: false, room: null };
+  }
+}
+
+/**
+ * OUTIL 2 : Recherche des salles par caractéristiques
+ * @param filters {capacity?, equipment?, location?, name?}
+ */
+export async function findRoomsByCharacteristics(filters: {
+  capacity?: number;
+  equipment?: string[];
+  location?: string;
+  name?: string;
+}) {
+  console.log(`🔍 Searching rooms with filters:`, filters);
+
+  try {
+    let query = supabase.from('rooms').select('*');
+
+    // Filtre par nom (recherche partielle)
+    if (filters.name) {
+      query = query.ilike('name', `%${filters.name}%`);
+    }
+
+    // Filtre par localisation (recherche partielle)
+    if (filters.location) {
+      query = query.ilike('location', `%${filters.location}%`);
+    }
+
+    // Filtre par capacité minimale
+    if (filters.capacity) {
+      query = query.gte('capacity', filters.capacity);
+    }
+
+    const { data: rooms, error } = await query;
+
+    if (error) {
+      console.error('❌ Erreur recherche salles:', error);
+      return [];
+    }
+
+    if (!rooms || rooms.length === 0) {
+      console.log('❌ Aucune salle trouvée');
+      return [];
+    }
+
+    // Filtrer par équipement (client-side car array comparison)
+    let filtered = rooms;
+    if (filters.equipment && filters.equipment.length > 0) {
+      filtered = rooms.filter((room) => {
+        const roomEquipment = Array.isArray(room.equipment) ? room.equipment : [];
+        return filters.equipment!.every((eq) =>
+          roomEquipment.some((re: any) => re.toLowerCase().includes(eq.toLowerCase()))
+        );
+      });
+    }
+
+    console.log(`✅ ${filtered.length} salle(s) trouvée(s)`);
+    return filtered;
+  } catch (error) {
+    console.error('❌ Erreur findRoomsByCharacteristics:', error);
+    return [];
+  }
+}
+
 export async function findAvailableRooms(date: string, duration: number, options?: { capacity?: number; equipment?: string[]; roomName?: string }) {
   console.log(`Finding available rooms for ${date} with duration ${duration} minutes. Options:`, options);
   
@@ -139,8 +245,8 @@ export async function findRoomByName(roomName: string): Promise<any | null> {
   }
 }
 
-export async function createBooking(roomName: string, date: string, duration: number, userId?: string) {
-  console.log(`Creating meeting for ${roomName} on ${date} for ${duration} minutes. UserId: ${userId}`);
+export async function createBooking(roomId: string, date: string, duration: number, userId?: string) {
+  console.log(`Creating meeting for room ${roomId} on ${date} for ${duration} minutes. UserId: ${userId}`);
   
   try {
     // Vérifier qu'un userId est fourni
@@ -148,15 +254,15 @@ export async function createBooking(roomName: string, date: string, duration: nu
       return { success: false, message: 'Vous devez être connecté pour réserver.' };
     }
 
-    // Récupérer l'ID de la salle par son nom
+    // Récupérer la salle
     const { data: room, error: roomError } = await supabase
       .from('rooms')
-      .select('id')
-      .ilike('name', roomName)
+      .select('id, name')
+      .eq('id', roomId)
       .single();
 
     if (roomError || !room) {
-      return { success: false, message: `Salle "${roomName}" introuvable.` };
+      return { success: false, message: `Salle introuvable.` };
     }
 
     // Créer la réservation dans la table meetings
@@ -206,7 +312,7 @@ export async function createBooking(roomName: string, date: string, duration: nu
       return { success: false, message: 'Erreur lors de la réservation.' };
     }
 
-    return { success: true, message: `Salle "${roomName}" réservée avec succès !` };
+    return { success: true, message: `Salle "${room.name}" réservée avec succès !` };
   } catch (error) {
     console.error('Erreur create meeting:', error);
     return { success: false, message: 'Erreur système lors de la réservation.' };
