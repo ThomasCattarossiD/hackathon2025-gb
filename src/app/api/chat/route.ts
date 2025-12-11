@@ -3,11 +3,7 @@ import { streamText, tool } from 'ai';
 import { z } from 'zod';
 import { findAvailableRooms, createBooking } from '@/services/bookingService';
 
-// -----------------------------------------------------------------------------
-// 1. LE CERVEAU (System Prompt)
-// -----------------------------------------------------------------------------
-// On définit ici la personnalité et les règles strictes.
-// Note : {{CURRENT_DATE}} sera remplacé dynamiquement à chaque requête.
+// 1. DÉFINITION DU PROMPT SYSTÈME & DES CONSTANTES
 const SYSTEM_PROMPT = `
 You are the "GoodBarber Workspace Agent" for the new 2026 HQ.
 Current Date & Time (Paris Time): {{CURRENT_DATE}}.
@@ -23,66 +19,85 @@ Help employees find and book meeting rooms efficiently.
 5. **Honesty:** Always use 'checkAvailability' before suggesting a room. Do not guess.
 6. **Fail Gracefully:** If a room is taken, immediately suggest another available room from the list.
 
+**WORKFLOWS (IMPORTANT):**
+- **Modification/Cancellation:** If a user wants to modify or cancel a meeting:
+  1. FIRST, call 'getMyBookings' to find the meeting ID.
+  2. Identify the correct meeting based on the user's description (e.g., "the one at 2pm").
+  3. THEN, call 'cancelBooking' or 'rescheduleBooking' with the correct ID.
+- **New Booking:** For new bookings:
+    1. ALWAYS call 'checkAvailability' first.
+    2. If rooms are available, present options to the user.
+    3. ONLY after user confirmation, call 'createBooking'.
+
 **TONE:**
 Professional, concise, helpful. Short answers are better for mobile users.
 `;
-
 export const maxDuration = 30; // Timeout de sécurité (30s)
 
-export async function POST(req: Request) {
-  // Récupération de l'historique de conversation
-  const { messages } = await req.json();
+// Objets Zod pour la validation des paramètres des outils
+const availabilityZodObject = z.object({
+    date: z.string().describe('Date et heure de début au format ISO 8601 (ex: 2026-12-12T14:00:00)'),
+    duration: z.number().describe('Durée en minutes (par défaut 60)'),
+});
 
-  // ---------------------------------------------------------------------------
-  // 2. INJECTION TEMPORELLE (Crucial pour "Demain", "Cet aprem")
-  // ---------------------------------------------------------------------------
-  // On calcule l'heure exacte de Paris maintenant pour que l'IA ait un repère.
+const roomBookingZodObject = z.object({
+    roomName: z.string().describe('Le nom exact de la salle à réserver'),
+    date: z.string().describe('Date et heure de début au format ISO 8601'),
+    duration: z.number().describe('Durée en minutes'),
+});
+
+// 2. AJUSTEMENT DYNAMIQUE DU PROMPT & RÉCUPÉRATION DES MESSAGES
+export async function POST(req: Request) {
+  const { messages } = await req.json(); // Récupération de l'historique de conversation
   const now = new Date();
   const parisTime = now.toLocaleString('fr-FR', {
     timeZone: 'Europe/Paris',
     dateStyle: 'full',
     timeStyle: 'medium',
   });
-  
-  // On remplace le placeholder dans le prompt
-  const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime);
 
-  // ---------------------------------------------------------------------------
-  // 3. APPEL OPENAI & DÉFINITION DES OUTILS (TOOLS)
-  // ---------------------------------------------------------------------------
-  const result = streamText({
-    model: openai('gpt-4o-mini'), // Modèle rapide et économique
+  
+const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime); // On remplace le placeholder dans le prompt
+
+// 3. APPEL À L'IA AVEC LES OUTILS BACKEND
+  const result = await streamText({
+    model: openai('gpt-4o-mini'), // Modèle rapide et efficace
     system: dynamicSystemPrompt,
     messages,
-    
-    // C'est ici qu'on branche tes fonctions Backend
+
     tools: {
-      
-      // OUTIL 1 : VÉRIFIER LA DISPO
+
+      // OUTIL 1 : VÉRIFIER LA DISPONIBILITÉ DES SALLES
       checkAvailability: tool({
         description: 'Vérifie les salles disponibles pour un créneau donné.',
-        parameters: z.object({
-          date: z.string().describe('Date et heure de début au format ISO 8601 (ex: 2026-12-12T14:00:00)'),
-          duration: z.number().describe('Durée en minutes (par défaut 60)'),
-        }),
-        execute: async ({ date, duration }) => {
+        parameters: availabilityZodObject,
+        execute: async ({ date, duration }: { date: string; duration: number }) => {
           console.log("🤖 IA Check Dispo :", date, duration + "min");
-          
+
           try {
             const availableRooms = await findAvailableRooms(date, duration);
-            
+
             if (availableRooms.length === 0) {
-              return "Aucune salle n'est libre à cet horaire précise. Demande à l'utilisateur s'il veut changer d'heure.";
+              return {
+                available: false,
+                message: "Aucune salle n'est libre à cet horaire précise. Demande à l'utilisateur s'il veut changer d'heure."
+              };
             }
 
             // On formate la réponse pour l'IA (JSON stringifié lisible)
-            return JSON.stringify(availableRooms.map(r => ({
-              nom: r.name,
-              capacite: r.capacity,
-              equipements: r.equipment
-            })));
+            return {
+              available: true,
+              rooms: availableRooms.map(r => ({
+                nom: r.name,
+                capacite: r.capacity,
+                equipements: r.equipment
+              }))
+            };
           } catch (error) {
-            return "Erreur technique lors de la vérification des disponibilités.";
+            return {
+              error: true,
+              message: "Une erreur critique est survenue lors de la vérification de la disponibilité."
+            };
           }
         },
       }),
@@ -90,24 +105,29 @@ export async function POST(req: Request) {
       // OUTIL 2 : RÉSERVER UNE SALLE
       createBooking: tool({
         description: 'Effectue la réservation ferme d\'une salle.',
-        parameters: z.object({
-          roomName: z.string().describe('Le nom exact de la salle à réserver'),
-          date: z.string().describe('Date et heure de début au format ISO 8601'),
-          duration: z.number().describe('Durée en minutes'),
-        }),
-        execute: async ({ roomName, date, duration }) => {
+        parameters: roomBookingZodObject,
+        execute: async ({ roomName, date, duration }: { roomName: string; date: string; duration: number; success: boolean }) => {
           console.log("🤖 IA Booking :", roomName, date);
-          
+
           try {
             const result = await createBooking(roomName, date, duration);
-            
+
             if (result.success) {
-              return `SUCCÈS : La salle ${roomName} a été réservée avec succès. Confirme-le à l'utilisateur.`;
+              return {
+                success: true,
+                message: `SUCCÈS : La salle ${roomName} a été réservée avec succès. Confirme-le à l'utilisateur.`
+              };
             } else {
-              return `ÉCHEC : ${result.message}. Dis-le à l'utilisateur et propose une autre solution.`;
+              return {
+                success: false,
+                message: `ÉCHEC : ${result.message}. Dis-le à l'utilisateur et propose une autre solution.`
+              };
             }
           } catch (error) {
-            return "Une erreur critique est survenue lors de la tentative de réservation.";
+            return {
+              error: true,
+              message: "Une erreur critique est survenue lors de la tentative de réservation."
+            };
           }
         },
       }),
@@ -115,5 +135,5 @@ export async function POST(req: Request) {
   });
 
   // On renvoie le flux (streaming) vers le frontend pour l'effet "machine à écrire"
-  return result.toDataStreamResponse();
+  return result.toTextStreamResponse();
 }
