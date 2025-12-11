@@ -135,5 +135,6 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
   });
 
   // On renvoie le flux (streaming) vers le frontend pour l'effet "machine à écrire"
-  return result.toTextStreamResponse();
+  console.log("🤖 Réponse IA en streaming...", result);
+  return result.toUIMessageStreamResponse();
 }
