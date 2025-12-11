@@ -1,5 +1,3 @@
-"use client"
-
 import { useChat } from "ai/react"
 import { useEffect, useRef } from "react"
 import { Send, Mic, MapPin, Sparkles, Loader2 } from "lucide-react" // Icônes
