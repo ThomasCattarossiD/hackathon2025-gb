@@ -1,75 +1,168 @@
 import { supabase } from '@/lib/supabaseClient';
-import { addMinutes, parseISO, isBefore, isAfter } from 'date-fns';
 
-// --- FONCTION 1 : VÉRIFIER LA DISPONIBILITÉ ---
-export async function findAvailableRooms(startIso: string, durationMinutes: number) {
-  const startDate = parseISO(startIso);
-  const endDate = addMinutes(startDate, durationMinutes);
+// Fonction utilitaire pour vérifier les conflits de réservation
+async function hasBookingConflict(roomId: number, startTime: string, endTime: string): Promise<boolean> {
+  try {
+    const { data: conflicts, error } = await supabase
+      .from('bookings')
+      .select('id')
+      .eq('room_id', roomId)
+      .or(`start_time.lt.${endTime},end_time.gt.${startTime}`)
+      .limit(1);
 
-  console.log(`🔍 Recherche de ${startDate.toISOString()} à ${endDate.toISOString()}`);
+    if (error) {
+      console.error('Erreur vérification conflit:', error);
+      return false;
+    }
 
-  // 1. On récupère TOUTES les réservations qui chevauchent ce créneau
-  // Logique : Une réunion gêne si elle commence AVANT ma fin ET finit APRÈS mon début.
-  const { data: conflicts, error } = await supabase
-    .from('bookings')
-    .select('room_id')
-    .lt('start_time', endDate.toISOString()) // Commence avant que je finisse
-    .gt('end_time', startDate.toISOString()); // Finit après que je commence
-
-  if (error) {
-    console.error("Erreur check conflit:", error);
-    return [];
+    return conflicts && conflicts.length > 0;
+  } catch (error) {
+    console.error('Erreur check conflict:', error);
+    return false;
   }
-
-  // 2. On liste les ID des salles occupées
-  const occupiedRoomIds = conflicts.map(b => b.room_id);
-
-  // 3. On récupère les salles qui NE SONT PAS dans la liste des occupées
-  let query = supabase.from('rooms').select('*');
-  
-  if (occupiedRoomIds.length > 0) {
-    query = query.not('id', 'in', `(${occupiedRoomIds.join(',')})`);
-  }
-
-  const { data: freeRooms } = await query;
-  
-  return freeRooms || [];
 }
 
-// --- FONCTION 2 : CRÉER UNE RÉSERVATION ---
-export async function createBooking(roomName: string, startIso: string, durationMinutes: number) {
-  // 1. Trouver l'ID de la salle à partir du nom
-  const { data: room } = await supabase
-    .from('rooms')
-    .select('id')
-    .ilike('name', roomName)
-    .single();
-
-  if (!room) return { success: false, message: `Salle '${roomName}' introuvable.` };
-
-  // 2. Calculer la fin
-  const startDate = parseISO(startIso);
-  const endDate = addMinutes(startDate, durationMinutes);
-
-  // 3. (Optionnel mais recommandé) Re-vérifier le conflit juste avant d'insérer (Double sécu)
+export async function findAvailableRooms(date: string, duration: number, options?: { capacity?: number; equipment?: string[] }) {
+  console.log(`Finding available rooms for ${date} with duration ${duration} minutes. Options:`, options);
   
-  // 4. Insérer
-  // Note: user_id est mis en dur pour le MVP si tu n'as pas encore fait l'Auth complète
-  // Idéalement : await supabase.auth.getUser()
-  const { error } = await supabase
-    .from('bookings')
-    .insert({
-      room_id: room.id,
-      start_time: startDate.toISOString(),
-      end_time: endDate.toISOString(),
-      title: 'Réservation via Agent IA',
-      user_id: 'met-ici-un-uuid-valide-de-ta-table-users-pour-tester' 
-    });
+  try {
+    // Récupérer toutes les salles actives
+    const { data: rooms, error } = await supabase
+      .from('rooms')
+      .select('*')
+      .eq('is_active', true);
 
-  if (error) {
-    console.error("Erreur insert:", error);
-    return { success: false, message: "Erreur technique lors de la réservation." };
+    if (error) {
+      console.error('Erreur récupération salles:', error);
+      return [];
+    }
+
+    if (!rooms || rooms.length === 0) {
+      return [];
+    }
+
+    // Calculer end_time
+    const startDate = new Date(date);
+    const endDate = new Date(startDate.getTime() + duration * 60000);
+
+    // Filtrer les salles : pas de conflit + critères optionnels
+    const availableRooms = [];
+    for (const room of rooms) {
+      // Vérifier conflit horaire
+      const hasConflict = await hasBookingConflict(room.id, date, endDate.toISOString());
+      if (hasConflict) continue;
+
+      // Filtrer par capacité si spécifiée
+      if (options?.capacity && room.capacity < options.capacity) {
+        continue;
+      }
+
+      // Filtrer par équipement si spécifié
+      if (options?.equipment && options.equipment.length > 0) {
+        const roomEquipment = Array.isArray(room.equipment) ? room.equipment : [];
+        const hasAllEquipment = options.equipment.every((eq) =>
+          roomEquipment.some((re: string) => re.toLowerCase().includes(eq.toLowerCase()))
+        );
+        if (!hasAllEquipment) continue;
+      }
+
+      availableRooms.push(room);
+    }
+
+    // Trier par capacité pour suggérer la salle la plus pertinente
+    availableRooms.sort((a, b) => a.capacity - b.capacity);
+    
+    return availableRooms;
+  } catch (error) {
+    console.error('Erreur find available rooms:', error);
+    return [];
   }
+}
 
-  return { success: true, message: `C'est fait ! ${roomName} réservée.` };
+// Nouvelle fonction pour rechercher une salle par localisation et horaire
+export async function findRoomByLocation(location: string, date?: string): Promise<any | null> {
+  console.log(`Finding room at location: ${location}`);
+  
+  try {
+    const { data: rooms, error } = await supabase
+      .from('rooms')
+      .select('*')
+      .ilike('location', `%${location}%`)
+      .eq('is_active', true)
+      .limit(1);
+
+    if (error) {
+      console.error('Erreur recherche par localisation:', error);
+      return null;
+    }
+
+    return rooms && rooms.length > 0 ? rooms[0] : null;
+  } catch (error) {
+    console.error('Erreur find room by location:', error);
+    return null;
+  }
+}
+
+// Fonction pour rechercher une salle par son nom exact
+export async function findRoomByName(roomName: string): Promise<any | null> {
+  console.log(`Finding room by name: ${roomName}`);
+  
+  try {
+    const { data: rooms, error } = await supabase
+      .from('rooms')
+      .select('*')
+      .ilike('name', roomName)
+      .eq('is_active', true)
+      .limit(1);
+
+    if (error) {
+      console.error('Erreur recherche par nom:', error);
+      return null;
+    }
+
+    return rooms && rooms.length > 0 ? rooms[0] : null;
+  } catch (error) {
+    console.error('Erreur find room by name:', error);
+    return null;
+  }
+}
+
+export async function createBooking(roomName: string, date: string, duration: number) {
+  console.log(`Creating booking for ${roomName} on ${date} for ${duration} minutes.`);
+  
+  try {
+    // Récupérer l'ID de la salle par son nom
+    const { data: room, error: roomError } = await supabase
+      .from('rooms')
+      .select('id')
+      .ilike('name', roomName)
+      .single();
+
+    if (roomError || !room) {
+      return { success: false, message: `Salle "${roomName}" introuvable.` };
+    }
+
+    // Créer la réservation
+    const { data: booking, error: bookingError } = await supabase
+      .from('bookings')
+      .insert([
+        {
+          room_id: room.id,
+          user_id: 'anonymous', // TODO: Récupérer l'user ID du contexte auth
+          title: 'Réunion réservée via chatbot',
+          start_time: date,
+          end_time: new Date(new Date(date).getTime() + duration * 60000).toISOString(),
+        },
+      ]);
+
+    if (bookingError) {
+      console.error('Erreur création booking:', bookingError);
+      return { success: false, message: 'Erreur lors de la réservation.' };
+    }
+
+    return { success: true, message: `Salle "${roomName}" réservée avec succès !` };
+  } catch (error) {
+    console.error('Erreur create booking:', error);
+    return { success: false, message: 'Erreur système lors de la réservation.' };
+  }
 }

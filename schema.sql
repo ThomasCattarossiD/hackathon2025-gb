@@ -1,33 +1,53 @@
--- WARNING: This schema is for context only and is not meant to be run.
--- Table order and constraints may not be valid for execution.
+-- ⚠️ ATTENTION : Ceci supprime les tables existantes pour les recréer proprement
+DROP TABLE IF EXISTS public.meetings;
+DROP TABLE IF EXISTS public.rooms CASCADE;
+DROP TABLE IF EXISTS public.users CASCADE;
 
-CREATE TABLE public.bookings (
-  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
-  room_id bigint NOT NULL,
-  user_id uuid NOT NULL,
-  title text,
-  start_time timestamp with time zone NOT NULL,
-  end_time timestamp with time zone NOT NULL,
-  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()),
-  CONSTRAINT bookings_pkey PRIMARY KEY (id),
-  CONSTRAINT bookings_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.rooms(id),
-  CONSTRAINT bookings_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+-- 1. Création de la table UTILISATEURS (Ref: Ton code)
+CREATE TABLE public.users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(), -- J'ai ajouté un générateur d'ID par défaut
+  full_name TEXT NOT NULL,
+  email TEXT UNIQUE NOT NULL,
+  society TEXT,
+  pmr_needed BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT timezone('utc', now())
 );
-CREATE TABLE public.profiles (
-  id uuid NOT NULL,
-  full_name text,
-  email text,
-  avatar_url text,
-  CONSTRAINT profiles_pkey PRIMARY KEY (id),
-  CONSTRAINT profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
-);
+
+-- 2. Création de la table SALLES (Ref: Ton code)
 CREATE TABLE public.rooms (
-  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
-  name text NOT NULL,
-  capacity integer NOT NULL,
-  location text,
-  equipment ARRAY,
-  is_active boolean DEFAULT true,
-  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()),
-  CONSTRAINT rooms_pkey PRIMARY KEY (id)
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name TEXT NOT NULL,
+  room_type TEXT NOT NULL, -- ex: "Réunion", "Formation", "Call-box"
+  capacity INTEGER NOT NULL,
+  floor INTEGER, 
+  location TEXT,
+  description TEXT, 
+  equipment TEXT[], 
+  opening_time TIME DEFAULT '08:00',
+  closing_time TIME DEFAULT '18:00',
+  pmr_accessible BOOLEAN DEFAULT TRUE,
+  -- J'ai retiré 'occupied' car c'est calculé dynamiquement via la table meetings
+  created_at TIMESTAMPTZ DEFAULT timezone('utc', now())
 );
+
+-- 3. Création de la table RÉUNIONS (Le lien entre les deux)
+CREATE TABLE public.meetings (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  
+  -- Clés étrangères (Liens)
+  room_id BIGINT NOT NULL REFERENCES public.rooms(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+
+  start_time TIMESTAMPTZ NOT NULL,
+  end_time TIMESTAMPTZ NOT NULL,
+  title TEXT DEFAULT 'Réunion',
+  attendees_count INTEGER DEFAULT 1,
+  status TEXT DEFAULT 'confirmed',
+  created_at TIMESTAMPTZ DEFAULT timezone('utc', now()),
+
+  -- Empêche une réunion de finir avant de commencer
+  CONSTRAINT check_dates CHECK (end_time > start_time)
+);
+
+-- 4. Index (Pour que l'IA soit rapide lors de la recherche)
+CREATE INDEX idx_meetings_dates ON public.meetings (room_id, start_time, end_time);

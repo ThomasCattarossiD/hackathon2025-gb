@@ -49,3 +49,6 @@ supabase/functions/**/.env
 
 # copilot instructions
 copilot-instructions.md
+
+*.md
+!README.md
