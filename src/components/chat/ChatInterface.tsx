@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Card } from "../ui/card";
 import ReservationsSidebar, { Reservation } from "./ReservationsSidebar";
+import { Separator } from "../ui/separator";
 
 
 // Extension de l'interface Window pour la reconnaissance vocale
@@ -359,8 +360,9 @@ export default function ChatInterface() {
             <div key={message.id} className={`flex w-full ${message.role === "user" ? "justify-end" : "justify-start"}`}>
               <div className={`flex max-w-[85%] md:max-w-[70%] items-end gap-2 ${message.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
                 <Avatar className="h-8 w-8 shrink-0">
-                  <AvatarFallback className={message.role === "bot" ? "bg-[#fe6c75] text-primary-foreground" : ""}>
-                    {message.role === "bot" ? <Bot size={16} /> : <User size={16} />}
+                        <AvatarFallback className={message.role === "bot" ? "bg-gradient-to-br from-[#fe6c75] to-pink-500 text-white shadow-lg" : ""}>
+
+                      {message.role === "bot" ? <Bot size={16} /> : <User size={16} />}
                   </AvatarFallback>
                 </Avatar>
 
@@ -369,10 +371,13 @@ export default function ChatInterface() {
                   
                   {/* Boutons Actions */}
                   {message.salleProp && !message.actionStatus && (
-                    <div className="mt-4 flex items-center gap-3">
-                      <Button variant="outline" className="h-10 px-5 text-sm font-medium border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 bg-background/50" onClick={() => handleReject(message.id)}>Rejeter</Button>
-                      <Button className="h-10 px-5 text-sm font-medium bg-green-600 hover:bg-green-700 text-white border-0 shadow-md" onClick={() => handleConfirm(message.id)}>Valider</Button>
-                    </div>
+                    <>
+                      <Separator className="my-2 bg-muted-foreground/30" />
+                      <div className="mt-2 flex items-center gap-3 justify-end">
+                        <Button variant="outline" className="h-10 px-5 text-sm font-medium border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 bg-background/50" onClick={() => handleReject(message.id)}>Rejeter</Button>
+                        <Button className="h-10 px-5 text-sm font-medium bg-green-600 hover:bg-green-700 text-white border-0 shadow-md" onClick={() => handleConfirm(message.id)}>Valider</Button>
+                      </div>
+                    </>
                   )}
 
                   {message.actionStatus === "accepted" && <div className=" mt-2 flex items-center gap-2 text-green-700 font-medium text-xs bg-green-100/50 px-3 py-1.5 rounded-md border border-green-200"><span>Salle acceptée</span></div>}
