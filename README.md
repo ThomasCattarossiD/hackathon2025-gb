@@ -66,38 +66,32 @@ Ouvrez http://localhost:3000 dans votre navigateur.
 
 Si tout se passe bien! Vous pouvez commencer directement à travailler sur le projet!
 
-### 🗄️ Base de Données (Supabase)
+## 🗄️ Base de Données (Supabase)
 
 Si vous devez configurer une nouvelle instance Supabase, le schéma SQL complet se trouve dans le fichier : 📄 schema.sql (à la racine du projet).
 
 Copiez le contenu de ce fichier dans l'éditeur SQL de votre dashboard Supabase pour créer les tables rooms, bookings, etc.
 
-### 🤝 Guide de Collaboration (Git Flow)
+## 🤝 Guide de Collaboration (Git Flow)
 
 Pour éviter les conflits et garder un code propre, merci de respecter ces règles scrupuleusement :
 
-    🚫 Jamais de commit direct sur main La branche main est la version "production" stable. On n'y touche pas directement.
+🚫 Jamais de commit direct sur main La branche main est la version "production" stable. On n'y touche pas directement.
 
-    🌿 Une branche par fonctionnalité Créez toujours une nouvelle branche pour travailler :
+🌿 Une branche par fonctionnalité Créez toujours une nouvelle branche pour travailler :
 
-    ```bash
-    git checkout -b feature/nom-de-ma-tache
-    # Exemple : git checkout -b feature/chat-interface
-    # Exemple : git checkout -b fix/booking-bug
-    ```
+```bash
+git checkout -b feature/nom-de-ma-tache
+# Exemple : git checkout -b feature/chat-interface
+# Exemple : git checkout -b fix/booking-bug
+```
 
-    🔄 Pull Request (PR) Une fois votre tâche terminée :
+🔄 Pull Request (PR) Une fois votre tâche terminée :
+    git push origin feature/nom-de-ma-tache
+    Allez sur GitHub et ouvrez une "Pull Request" vers main.
+    Attendez ma validation avant de fusionner (Merge).
 
-        git push origin feature/nom-de-ma-tache
-
-        Allez sur GitHub et ouvrez une "Pull Request" vers main.
-
-        Attendez ma validation avant de fusionner (Merge).
-
-    📝 Messages de commit clairs Essayez d'être descriptif :
-
-        ✅ feat: ajoute le bouton micro
-
-        ✅ fix: corrige le bug de date
-
-        ❌ update, test, fgjh
+📝 Messages de commit clairs Essayez d'être descriptif :
+    ✅ feat: ajoute le bouton micro
+    ✅ fix: corrige le bug de date
+    ❌ update, test, fgjh
