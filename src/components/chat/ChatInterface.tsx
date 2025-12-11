@@ -219,7 +219,7 @@ export default function ChatInterface() {
         </div>
 
         {/* Titre centré */}
-        <h1 className="text-lg font-semibold tracking-tight">RoomBarber</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">RoomBarber</h1>
 
         {/* Bouton Profil (Positionné en absolu à droite) */}
         <div className="absolute right-4 inset-y-0 flex items-center">
@@ -293,7 +293,7 @@ export default function ChatInterface() {
               >
                 {/* Avatar */}
                 <Avatar className="h-8 w-8 shrink-0">
-                  <AvatarFallback className={message.role === "bot" ? "bg-primary text-primary-foreground" : ""}>
+                  <AvatarFallback className={message.role === "bot" ? "bg-[#fe6c75] text-primary-foreground" : ""}>
                     {message.role === "bot" ? <Bot size={16} /> : <User size={16} />}
                   </AvatarFallback>
                 </Avatar>
@@ -350,39 +350,42 @@ export default function ChatInterface() {
       </ScrollArea>
 
       {/* BARRE D'INPUT (FOOTER) */}
-      <div className="p-6 bg-background border-t sticky bottom-0 z-10">
-        <div className="flex items-center gap-2">
-          
-          {/* Bouton Vocal */}
-          <Button
+      <div className="py-2 px-4 bg-background border-t sticky bottom-0 z-10">
+        <div className="flex items-center gap-3 py-4">
+
+            {/* Bouton Vocal */}
+            <Button
             variant={isRecording ? "destructive" : "outline"}
             size="icon"
-            className="rounded-full shrink-0"
+            className="rounded-full shrink-0 h-12 w-12"
             onClick={handleVoiceRecord}
-          >
-            <Mic size={20} className={isRecording ? "animate-pulse" : ""} />
+            >
+            <Mic size={26} className={isRecording ? "animate-pulse !h-5 !w-5" : "!h-5 !w-5"} />
             <span className="sr-only">Reconnaissance vocale</span>
-          </Button>
+            </Button>
 
-          {/* Champ Texte */}
-          <Input
-            className="flex-1 rounded-full bg-muted/50 border-0 focus-visible:ring-1 focus-visible:ring-primary"
+            {/* Champ Texte */}
+            <Input
+            className="flex-1 rounded-full bg-muted/50 border-0 
+                        focus-visible:ring-1 focus-visible:ring-primary 
+                        h-10 px-5 text-base"
             placeholder="Écrivez votre message..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-          />
+            />
 
-          {/* Bouton Envoyer */}
-          <Button 
-            size="icon" 
-            className="rounded-full shrink-0" 
-            onClick={handleSend}
-            disabled={!input.trim()}
-          >
-            <Send size={18} />
+            {/* Bouton Envoyer */}
+            <Button 
+              size="icon" 
+              className="rounded-full shrink-0 h-12 w-12 disabled:bg-gray-400"
+              onClick={handleSend}
+              disabled={!input.trim()}
+              variant={"custom"}
+            >
+            <Send className="!h-5 !w-5" size={24} />
             <span className="sr-only">Envoyer</span>
-          </Button>
+            </Button>
         </div>
       </div>
     </div>
