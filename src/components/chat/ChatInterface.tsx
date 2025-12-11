@@ -26,7 +26,11 @@ type UserProfile = {
     role: string;
 };
 
-export default function ChatInterface() {
+interface ChatInterfaceProps {
+    userId?: string;
+}
+
+export default function ChatInterface({ userId }: ChatInterfaceProps) {
     const [input, setInput] = useState("");
     const [isRecording, setIsRecording] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);

@@ -110,7 +110,7 @@ export const chatTools = {
   // OUTIL 1 : VÉRIFIER LA DISPONIBILITÉ DES SALLES
   checkAvailability: tool({
     description:
-      'Vérifie les salles disponibles pour un créneau donné, avec filtres optionnels.',
+      'Vérifie les salles disponibles pour un créneau donné et retourne la meilleure option.',
     inputSchema: availabilityZodObject,
     execute: async ({ date, duration = 60, capacity, equipment }) => {
       console.log('🤖 IA Check Dispo :', date, (duration || 60) + 'min', {
@@ -130,34 +130,39 @@ export const chatTools = {
           const response = {
             available: false,
             message:
-              '❌ Aucune salle n\'est libre à cet horaire avec ces critères. Demande à l\'utilisateur s\'il veut changer d\'heure ou de critères.',
-            rooms: [],
-            formattedResponse: 'Aucune salle disponible correspondant à vos critères.',
+              'Aucune salle n\'est disponible avec ces critères à cet horaire.',
+            bestRoom: null,
           };
           console.log('📤 Réponse checkAvailability (vide):', response);
           return response;
         }
 
-        // Format lisible pour l'IA avec le formatter
-        const formattedResponse = formatRoomsResponse(availableRooms);
+        // Retourner UNIQUEMENT la meilleure salle (la première qui correspond aux critères)
+        const bestRoom = availableRooms[0];
+        const startDate = new Date(date);
+        const endDate = new Date(startDate.getTime() + (duration || 60) * 60000);
+        
         const response = {
           available: true,
-          message: `${availableRooms.length} salle(s) disponible(s) à ${date} pour ${duration || 60} minutes.`,
-          rooms: availableRooms,
-          formattedResponse: formattedResponse,
+          message: `✅ La salle "${bestRoom.name}" est disponible le ${startDate.toLocaleDateString('fr-FR')} de ${startDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} à ${endDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} (Capacité: ${bestRoom.capacity}, Localisation: ${bestRoom.location})`,
+          bestRoom: {
+            id: bestRoom.id,
+            name: bestRoom.name,
+            capacity: bestRoom.capacity,
+            location: bestRoom.location,
+            equipment: bestRoom.equipment,
+            description: bestRoom.description,
+          },
         };
         console.log('📤 Réponse checkAvailability:', response);
         return response;
       } catch (error) {
-        console.error('❌ Erreur check availability:', error);
-        const response = {
+        console.error('❌ Erreur checkAvailability:', error);
+        return {
           available: false,
-          error: true,
-          message: '❌ Erreur lors de la vérification de la disponibilité.',
-          formattedResponse: 'Une erreur est survenue. Veuillez réessayer.',
+          message: `Erreur lors de la vérification: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
+          bestRoom: null,
         };
-        console.log('📤 Réponse checkAvailability (erreur):', response);
-        return response;
       }
     },
   }),
