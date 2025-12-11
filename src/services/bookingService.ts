@@ -22,7 +22,7 @@ async function hasMeetingConflict(roomId: number, startTime: string, endTime: st
   }
 }
 
-export async function findAvailableRooms(date: string, duration: number, options?: { capacity?: number; equipment?: string[] }) {
+export async function findAvailableRooms(date: string, duration: number, options?: { capacity?: number; equipment?: string[]; roomName?: string }) {
   console.log(`Finding available rooms for ${date} with duration ${duration} minutes. Options:`, options);
   
   try {
@@ -44,9 +44,24 @@ export async function findAvailableRooms(date: string, duration: number, options
     const startDate = new Date(date);
     const endDate = new Date(startDate.getTime() + duration * 60000);
 
+    // Si une salle spécifique est demandée, la chercher en priorité
+    let availableRooms = [];
+    if (options?.roomName) {
+      const specificRoom = rooms.find((r) => r.name.toLowerCase() === options?.roomName?.toLowerCase());
+      if (specificRoom) {
+        const hasConflict = await hasMeetingConflict(specificRoom.id, date, endDate.toISOString());
+        if (!hasConflict) {
+          availableRooms.push(specificRoom);
+        }
+      }
+    }
+
     // Filtrer les salles : pas de conflit + critères optionnels
-    const availableRooms = [];
+    // (Pour alternatives ou si salle spécifique non trouvée/indisponible)
     for (const room of rooms) {
+      // Sauter la salle si elle a déjà été ajoutée (salle spécifique)
+      if (availableRooms.some((r) => r.id === room.id)) continue;
+
       // Vérifier conflit horaire
       const hasConflict = await hasMeetingConflict(room.id, date, endDate.toISOString());
       if (hasConflict) continue;

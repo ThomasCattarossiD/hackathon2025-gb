@@ -157,6 +157,16 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
         if (scrollRef.current) {
             scrollRef.current.scrollIntoView({ behavior: "smooth" });
         }
+        
+        // Debug logging pour voir la structure des messages
+        if (messages.length > 0) {
+            const lastMessage = messages[messages.length - 1];
+            console.log('📩 Dernier message:', {
+                role: lastMessage.role,
+                id: lastMessage.id,
+                partsLength: lastMessage.parts?.length
+            });
+        }
     }, [messages]);
 
     // Rafraîchir les réservations après chaque message (pour détecter les nouvelles réservations)
@@ -293,7 +303,28 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
       {/* ZONE DE MESSAGES */}
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4 pb-4">
-          {messages.map((message) => (
+          {messages
+            .filter((message) => {
+              // Toujours afficher les messages utilisateur
+              if (message.role === "user") return true;
+              
+              // Pour les messages assistant : vérifier qu'il y a du contenu
+              if (!message.parts || message.parts.length === 0) return false;
+              
+              // Afficher si :
+              // 1) Il y a du texte normal
+              const hasText = message.parts.some(
+                (part: any) => part.type === "text" && part.text?.trim().length > 0
+              );
+              
+              // 2) OU il y a un résultat de tool avec du texte
+              const hasToolOutput = message.parts.some(
+                (part: any) => part.type?.startsWith("tool-") && part.output?.text?.trim().length > 0
+              );
+              
+              return hasText || hasToolOutput;
+            })
+            .map((message) => (
             <div
               key={message.id}
               className={`flex w-full ${
@@ -320,28 +351,40 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
                       : "bg-muted text-muted-foreground rounded-bl-none"
                   }`}
                 >
-                  {message.parts?.map((part: any, idx: number) =>
-                    part.type === "text" ? (
-                      <div
-                        key={idx}
-                        className={`prose prose-sm max-w-none
-                          [&_strong]:font-semibold
-                          [&_em]:italic
-                          [&_code]:bg-slate-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono
-                          [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-2
-                          [&_ol]:list-decimal [&_ol]:pl-4 [&_ol]:my-2
-                          [&_li]:mb-1
-                          [&_a]:text-blue-600 [&_a]:underline
-                          [&_p]:my-1
-                          ${message.role === "user" 
-                            ? "[&_a]:text-blue-300 [&_strong]:text-white [&_code]:bg-blue-500 [&_code]:text-white" 
-                            : ""
+                  {/* Afficher le texte ET les résultats des tools */}
+                  {message.parts && message.parts.length > 0 && (
+                    <div
+                      className={`prose prose-sm max-w-none
+                        [&_strong]:font-semibold
+                        [&_em]:italic
+                        [&_code]:bg-slate-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono
+                        [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-2
+                        [&_ol]:list-decimal [&_ol]:pl-4 [&_ol]:my-2
+                        [&_li]:mb-1
+                        [&_a]:text-blue-600 [&_a]:underline
+                        [&_p]:my-1
+                        ${message.role === "user" 
+                          ? "[&_a]:text-blue-300 [&_strong]:text-white [&_code]:bg-blue-500 [&_code]:text-white" 
+                          : ""
+                        }
+                      `}
+                    >
+                      {message.parts
+                        .map((part: any, idx: number) => {
+                          // Afficher les parties texte normales
+                          if (part.type === "text") {
+                            return <ReactMarkdown key={idx}>{part.text}</ReactMarkdown>;
                           }
-                        `}
-                      >
-                        <ReactMarkdown>{part.text}</ReactMarkdown>
-                      </div>
-                    ) : null
+                          
+                          // Afficher les résultats des tool calls (checkAvailability, createBooking, etc.)
+                          if (part.type?.startsWith("tool-") && part.output?.text) {
+                            return <ReactMarkdown key={idx}>{part.output.text}</ReactMarkdown>;
+                          }
+                          
+                          return null;
+                        })
+                        .filter(Boolean)}
+                    </div>
                   )}
                 </div>
               </div>

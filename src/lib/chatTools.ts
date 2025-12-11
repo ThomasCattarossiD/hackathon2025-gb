@@ -41,6 +41,10 @@ const availabilityZodObject = z
       .array(z.string())
       .optional()
       .describe('Liste des équipements requis (ex: ["vidéo-projecteur", "wifi"])'),
+    roomName: z
+      .string()
+      .optional()
+      .describe('Nom spécifique de la salle à vérifier (ex: "Aquarium", "Innovation Lab")'),
   })
   .describe('Paramètres pour vérifier la disponibilité des salles');
 
@@ -112,39 +116,61 @@ export const chatTools = {
     description:
       'Vérifie les salles disponibles pour un créneau donné et retourne la meilleure option.',
     inputSchema: availabilityZodObject,
-    execute: async ({ date, duration = 60, capacity, equipment }) => {
+    execute: async ({ date, duration = 60, capacity, equipment, roomName }) => {
       console.log('🤖 IA Check Dispo :', date, (duration || 60) + 'min', {
         capacity,
         equipment,
+        roomName,
       });
 
       try {
         const availableRooms = await findAvailableRooms(
           date,
           duration || 60,
-          { capacity, equipment }
+          { capacity, equipment, roomName }
         );
         console.log('📦 Rooms trouvées :', availableRooms);
 
         if (!availableRooms || availableRooms.length === 0) {
+          // Si une salle spécifique était demandée et indisponible, retourner ses détails
+          // pour que l'IA puisse proposer des alternatives avec les mêmes critères
+          let unavailableRoomDetails = null;
+          if (roomName) {
+            unavailableRoomDetails = await findRoomByName(roomName);
+          }
+
+          const baseMessage = roomName 
+            ? `❌ Malheureusement, la salle **${roomName}** n'est pas disponible à cet horaire.`
+            : '❌ Malheureusement, aucune salle n\'est disponible avec ces critères à cet horaire.';
+          
           const response = {
             available: false,
-            message:
-              'Aucune salle n\'est disponible avec ces critères à cet horaire.',
+            text: baseMessage + ' Voulez-vous essayer avec des critères différents ou à un autre moment ?',
             bestRoom: null,
+            allRooms: [],
+            requestedRoomName: roomName || null,
+            // Ajouter les détails de la salle indisponible pour que l'IA propose des alternatives similaires
+            unavailableRoomDetails: unavailableRoomDetails || null,
           };
           console.log('📤 Réponse checkAvailability (vide):', response);
           return response;
         }
 
-        // Retourner UNIQUEMENT la meilleure salle (la première qui correspond aux critères)
+        // Retourner UNE salle principale + les alternatives
         const bestRoom = availableRooms[0];
         const startDate = new Date(date);
         const endDate = new Date(startDate.getTime() + (duration || 60) * 60000);
         
+        // Message différencié si c'est une salle spécifique demandée
+        const confirmation = roomName && bestRoom.name.toLowerCase() === roomName.toLowerCase()
+          ? `✅ Parfait ! La salle **${bestRoom.name}** est disponible`
+          : `✅ Excellente nouvelle ! La salle **${bestRoom.name}** est disponible`;
+        
+        const text = `${confirmation} le ${startDate.toLocaleDateString('fr-FR')} de ${startDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} à ${endDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}.\n\n📊 Détails:\n- 👥 Capacité: ${bestRoom.capacity} personnes\n- 📍 Localisation: ${bestRoom.location}\n- 🛠️ Équipements: ${Array.isArray(bestRoom.equipment) && bestRoom.equipment.length > 0 ? bestRoom.equipment.join(', ') : 'Équipements standard'}\n\nVoulez-vous réserver cette salle ?`;
+        
         const response = {
           available: true,
-          message: `✅ La salle "${bestRoom.name}" est disponible le ${startDate.toLocaleDateString('fr-FR')} de ${startDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} à ${endDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} (Capacité: ${bestRoom.capacity}, Localisation: ${bestRoom.location})`,
+          text: text,
           bestRoom: {
             id: bestRoom.id,
             name: bestRoom.name,
@@ -153,6 +179,15 @@ export const chatTools = {
             equipment: bestRoom.equipment,
             description: bestRoom.description,
           },
+          // Retourner toutes les salles disponibles pour permettre à l'IA de proposer des alternatives
+          allRooms: availableRooms.map((room: any) => ({
+            id: room.id,
+            name: room.name,
+            capacity: room.capacity,
+            location: room.location,
+            equipment: room.equipment,
+          })),
+          requestedRoomName: roomName || null,
         };
         console.log('📤 Réponse checkAvailability:', response);
         return response;
@@ -160,8 +195,9 @@ export const chatTools = {
         console.error('❌ Erreur checkAvailability:', error);
         return {
           available: false,
-          message: `Erreur lors de la vérification: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
+          text: `❌ Une erreur s'est produite lors de la vérification de la disponibilité: ${error instanceof Error ? error.message : 'Erreur inconnue'}`,
           bestRoom: null,
+          allRooms: [],
         };
       }
     },
@@ -179,32 +215,37 @@ export const chatTools = {
         console.log('📦 Room trouvée :', room);
 
         if (!room) {
+          const text = `Pas de salle disponible à la localisation "${location}".`;
           const response = {
             found: false,
+            text: text,
             message: `Aucune salle trouvée à la localisation "${location}".`,
             room: null,
-            formattedResponse: `Pas de salle disponible à la localisation "${location}".`,
+            formattedResponse: text,
           };
           console.log('📤 Réponse findRoomByLocation (not found):', response);
           return response;
         }
 
-        const formattedResponse = `📍 **${room.name}**\n👥 Capacité: ${room.capacity} personne(s)\n📦 Équipements: ${(room.equipment || []).join(', ')}\n📍 Localisation: ${room.location}`;
+        const text = `📍 **${room.name}**\n👥 Capacité: ${room.capacity} personne(s)\n📦 Équipements: ${(room.equipment || []).join(', ')}\n📍 Localisation: ${room.location}`;
         const response = {
           found: true,
+          text: text,
           message: `Salle trouvée à ${location}`,
           room: room,
-          formattedResponse: formattedResponse,
+          formattedResponse: text,
         };
         console.log('📤 Réponse findRoomByLocation:', response);
         return response;
       } catch (error) {
         console.error('❌ Erreur find room by location:', error);
+        const text = 'Une erreur est survenue lors de la recherche.';
         const response = {
           found: false,
           error: true,
+          text: text,
           message: 'Erreur lors de la recherche de salle.',
-          formattedResponse: 'Une erreur est survenue lors de la recherche.',
+          formattedResponse: text,
         };
         console.log('📤 Réponse findRoomByLocation (erreur):', response);
         return response;
@@ -225,32 +266,37 @@ export const chatTools = {
         console.log('📦 Room trouvée :', room);
 
         if (!room) {
+          const text = `La salle "${roomName}" n'existe pas ou n'est pas active.`;
           const response = {
             found: false,
+            text: text,
             message: `Salle "${roomName}" non trouvée.`,
             room: null,
-            formattedResponse: `La salle "${roomName}" n'existe pas ou n'est pas active.`,
+            formattedResponse: text,
           };
           console.log('📤 Réponse findRoomByName (not found):', response);
           return response;
         }
 
-        const formattedResponse = `✅ **${room.name}**\n👥 Capacité: ${room.capacity} personne(s)\n📦 Équipements: ${(room.equipment || []).join(', ')}\n📍 Localisation: ${room.location}`;
+        const text = `✅ **${room.name}**\n👥 Capacité: ${room.capacity} personne(s)\n📦 Équipements: ${(room.equipment || []).join(', ')}\n📍 Localisation: ${room.location}`;
         const response = {
           found: true,
+          text: text,
           message: `Salle "${roomName}" trouvée`,
           room: room,
-          formattedResponse: formattedResponse,
+          formattedResponse: text,
         };
         console.log('📤 Réponse findRoomByName:', response);
         return response;
       } catch (error) {
         console.error('❌ Erreur find room by name:', error);
+        const text = 'Une erreur est survenue lors de la recherche.';
         const response = {
           found: false,
           error: true,
+          text: text,
           message: 'Erreur lors de la recherche de salle.',
-          formattedResponse: 'Une erreur est survenue lors de la recherche.',
+          formattedResponse: text,
         };
         console.log('📤 Réponse findRoomByName (erreur):', response);
         return response;
@@ -276,6 +322,7 @@ export const chatTools = {
 
         const response = {
           success: result.success,
+          text: formattedResponse,
           message: `${result.message}\n\n${formattedResponse}`,
           formattedResponse: formattedResponse,
         };
@@ -289,6 +336,7 @@ export const chatTools = {
         );
         const response = {
           success: false,
+          text: formattedResponse,
           message: 'Erreur système lors de la réservation.',
           formattedResponse: formattedResponse,
         };
@@ -311,8 +359,10 @@ export const chatTools = {
         console.log('📦 Résultat recherche réunion :', result);
 
         if (!result.found) {
+          const text = result.message;
           const response = {
             found: false,
+            text: text,
             message: result.message,
             formattedResponse: result.message,
           };
@@ -322,22 +372,25 @@ export const chatTools = {
 
         const meeting = result.meeting as Record<string, unknown>;
         const roomData = Array.isArray(meeting.rooms) ? (meeting.rooms as any[])[0] : meeting.rooms;
-        const formattedResponse = `📅 **${meeting.title}**\n🏢 Salle: ${(roomData as any)?.name}\n⏰ ${new Date(meeting.start_time as string).toLocaleString('fr-FR')} - ${new Date(meeting.end_time as string).toLocaleTimeString('fr-FR')}\n📍 Localisation: ${(roomData as any)?.location}`;
+        const text = `📅 **${meeting.title}**\n🏢 Salle: ${(roomData as any)?.name}\n⏰ ${new Date(meeting.start_time as string).toLocaleString('fr-FR')} - ${new Date(meeting.end_time as string).toLocaleTimeString('fr-FR')}\n📍 Localisation: ${(roomData as any)?.location}`;
         const response = {
           found: true,
+          text: text,
           meeting: meeting,
           message: `Réunion trouvée pour ${company}`,
-          formattedResponse: formattedResponse,
+          formattedResponse: text,
         };
         console.log('📤 Réponse findMeetingByCompany:', response);
         return response;
       } catch (error) {
         console.error('❌ Erreur find meeting by company:', error);
+        const text = 'Une erreur est survenue lors de la recherche.';
         const response = {
           found: false,
           error: true,
+          text: text,
           message: 'Erreur lors de la recherche.',
-          formattedResponse: 'Une erreur est survenue lors de la recherche.',
+          formattedResponse: text,
         };
         console.log('📤 Réponse findMeetingByCompany (erreur):', response);
         return response;
@@ -366,22 +419,26 @@ export const chatTools = {
         const result = await updateMeeting(meetingId, updates);
         console.log('📦 Résultat mise à jour :', result);
 
+        const text = result.success
+          ? '✅ Réunion mise à jour avec succès !'
+          : `❌ ${result.message}`;
         const response = {
           success: result.success,
+          text: text,
           message: result.message,
-          formattedResponse: result.success
-            ? '✅ Réunion mise à jour avec succès !'
-            : `❌ ${result.message}`,
+          formattedResponse: text,
         };
         console.log('📤 Réponse updateMeeting:', response);
         return response;
       } catch (error) {
         console.error('❌ Erreur update meeting:', error);
+        const text = 'Une erreur est survenue lors de la mise à jour.';
         const response = {
           success: false,
           error: true,
+          text: text,
           message: 'Erreur lors de la mise à jour.',
-          formattedResponse: 'Une erreur est survenue lors de la mise à jour.',
+          formattedResponse: text,
         };
         console.log('📤 Réponse updateMeeting (erreur):', response);
         return response;
@@ -403,11 +460,13 @@ export const chatTools = {
         console.log('📦 Réunions trouvées :', result.meetings);
 
         if (!result.meetings || result.meetings.length === 0) {
+          const text = 'Vous n\'avez aucune réunion prévue.';
           const response = {
             found: false,
+            text: text,
             meetings: [],
             message: 'Aucune réunion prévue.',
-            formattedResponse: 'Vous n\'avez aucune réunion prévue.',
+            formattedResponse: text,
           };
           console.log('📤 Réponse getUserMeetings (empty):', response);
           return response;
@@ -420,22 +479,26 @@ export const chatTools = {
           )
           .join('\n');
 
+        const text = `📅 **Vos réunions:**\n${formattedList}`;
         const response = {
           found: true,
+          text: text,
           meetings: result.meetings,
           message: `${result.meetings.length} réunion(s) prévue(s)`,
-          formattedResponse: `📅 **Vos réunions:**\n${formattedList}`,
+          formattedResponse: text,
         };
         console.log('📤 Réponse getUserMeetings:', response);
         return response;
       } catch (error) {
         console.error('❌ Erreur get user meetings:', error);
+        const text = 'Une erreur est survenue.';
         const response = {
           found: false,
           meetings: [],
           error: true,
+          text: text,
           message: 'Erreur lors de la récupération des réunions.',
-          formattedResponse: 'Une erreur est survenue.',
+          formattedResponse: text,
         };
         console.log('📤 Réponse getUserMeetings (erreur):', response);
         return response;
@@ -480,24 +543,26 @@ export function createToolsWithUserContext(userId?: string) {
           const result = await createBooking(roomName, date, duration, userId);
           console.log('📦 Résultat booking :', result);
 
-          const formattedResponse = result.success
+          const text = result.success
             ? `✅ **Réservation confirmée pour ${roomName}**\n\n📅 ${new Date(date).toLocaleDateString('fr-FR')} de ${new Date(date).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} à ${new Date(new Date(date).getTime() + duration * 60000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}\n\n✨ Votre réunion est maintenant réservée !`
             : `❌ **Réservation échouée pour ${roomName}**\n\nRaison: ${result.message}`;
 
           const response = {
             success: result.success,
+            text: text,
             message: result.message,
-            formattedResponse: formattedResponse,
+            formattedResponse: text,
           };
           console.log('📤 Réponse createBooking:', response);
           return response;
         } catch (error) {
           console.error('❌ Erreur create booking:', error);
-          const formattedResponse = `❌ **Réservation échouée pour ${roomName}**\n\nUne erreur système est survenue.`;
+          const text = `❌ **Réservation échouée pour ${roomName}**\n\nUne erreur système est survenue.`;
           const response = {
             success: false,
+            text: text,
             message: 'Erreur système lors de la réservation.',
-            formattedResponse: formattedResponse,
+            formattedResponse: text,
           };
           console.log('📤 Réponse createBooking (erreur):', response);
           return response;
@@ -526,10 +591,12 @@ export function createToolsWithUserContext(userId?: string) {
           console.log('📦 Résultat recherche réunion :', result);
 
           if (!result.found) {
+            const text = result.message;
             const response = {
               found: false,
+              text: text,
               message: result.message,
-              formattedResponse: result.message,
+              formattedResponse: text,
             };
             console.log('📤 Réponse findMeetingByCompany (not found):', response);
             return response;
@@ -537,22 +604,25 @@ export function createToolsWithUserContext(userId?: string) {
 
           const meeting = result.meeting as Record<string, unknown>;
           const roomData = Array.isArray(meeting.rooms) ? (meeting.rooms as any[])[0] : meeting.rooms;
-          const formattedResponse = `📅 **${meeting.title}**\n🏢 Salle: ${(roomData as any)?.name}\n⏰ ${new Date(meeting.start_time as string).toLocaleString('fr-FR')} - ${new Date(meeting.end_time as string).toLocaleTimeString('fr-FR')}\n📍 Localisation: ${(roomData as any)?.location}`;
+          const text = `📅 **${meeting.title}**\n🏢 Salle: ${(roomData as any)?.name}\n⏰ ${new Date(meeting.start_time as string).toLocaleString('fr-FR')} - ${new Date(meeting.end_time as string).toLocaleTimeString('fr-FR')}\n📍 Localisation: ${(roomData as any)?.location}`;
           const response = {
             found: true,
+            text: text,
             meeting: meeting,
             message: `Réunion trouvée pour ${company}`,
-            formattedResponse: formattedResponse,
+            formattedResponse: text,
           };
           console.log('📤 Réponse findMeetingByCompany:', response);
           return response;
         } catch (error) {
           console.error('❌ Erreur find meeting by company:', error);
+          const text = 'Une erreur est survenue lors de la recherche.';
           const response = {
             found: false,
             error: true,
+            text: text,
             message: 'Erreur lors de la recherche.',
-            formattedResponse: 'Une erreur est survenue lors de la recherche.',
+            formattedResponse: text,
           };
           console.log('📤 Réponse findMeetingByCompany (erreur):', response);
           return response;
@@ -597,22 +667,26 @@ export function createToolsWithUserContext(userId?: string) {
           const result = await updateMeeting(meetingId, updates, userId);
           console.log('📦 Résultat mise à jour :', result);
 
+          const text = result.success
+            ? '✅ Réunion mise à jour avec succès !'
+            : `❌ ${result.message}`;
           const response = {
             success: result.success,
+            text: text,
             message: result.message,
-            formattedResponse: result.success
-              ? '✅ Réunion mise à jour avec succès !'
-              : `❌ ${result.message}`,
+            formattedResponse: text,
           };
           console.log('📤 Réponse updateMeeting:', response);
           return response;
         } catch (error) {
           console.error('❌ Erreur update meeting:', error);
+          const text = 'Une erreur est survenue lors de la mise à jour.';
           const response = {
             success: false,
             error: true,
+            text: text,
             message: 'Erreur lors de la mise à jour.',
-            formattedResponse: 'Une erreur est survenue lors de la mise à jour.',
+            formattedResponse: text,
           };
           console.log('📤 Réponse updateMeeting (erreur):', response);
           return response;
@@ -634,11 +708,13 @@ export function createToolsWithUserContext(userId?: string) {
           console.log('📦 Réunions trouvées :', result.meetings);
 
           if (!result.meetings || result.meetings.length === 0) {
+            const text = 'Vous n\'avez aucune réunion prévue.';
             const response = {
               found: false,
+              text: text,
               meetings: [],
               message: 'Aucune réunion prévue.',
-              formattedResponse: 'Vous n\'avez aucune réunion prévue.',
+              formattedResponse: text,
             };
             console.log('📤 Réponse getUserMeetings (empty):', response);
             return response;
@@ -651,20 +727,24 @@ export function createToolsWithUserContext(userId?: string) {
             )
             .join('\n');
 
+          const text = `📅 **Vos réunions:**\n${formattedList}`;
           const response = {
             found: true,
+            text: text,
             meetings: result.meetings,
             message: `${result.meetings.length} réunion(s) prévue(s)`,
-            formattedResponse: `📅 **Vos réunions:**\n${formattedList}`,
+            formattedResponse: text,
           };
           console.log('📤 Réponse getUserMeetings:', response);
           return response;
         } catch (error) {
           console.error('❌ Erreur get user meetings:', error);
+          const text = 'Une erreur est survenue.';
           const response = {
             found: false,
             meetings: [],
             error: true,
+            text: text,
             message: 'Erreur lors de la récupération des réunions.',
             formattedResponse: 'Une erreur est survenue.',
           };
