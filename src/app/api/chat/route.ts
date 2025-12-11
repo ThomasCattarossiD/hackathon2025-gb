@@ -1,6 +1,6 @@
 import { openai } from '@ai-sdk/openai';
 import { convertToModelMessages, streamText } from 'ai';
-import { chatTools } from '@/lib/chatTools';
+import { createToolsWithUserContext } from '@/lib/chatTools';
 import { decodeSessionToken, getUserById } from '@/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -156,12 +156,16 @@ export async function POST(req: NextRequest) {
 
   const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime); // On remplace le placeholder dans le prompt
 
-  // 3. APPEL À L'IA AVEC LES OUTILS BACKEND
+  // 3. CRÉER LES TOOLS AVEC ACCÈS AU USERID (contexte d'authentification)
+  // On utilise le userId du currentUser pour les opérations qui l'exigent
+  const toolsWithUserContext = createToolsWithUserContext(currentUser?.id);
+
+  // 4. APPEL À L'IA AVEC LES OUTILS BACKEND
   const result = await streamText({
     model: openai('gpt-4o-mini'), // Modèle rapide et efficace
     system: dynamicSystemPrompt,
     messages: convertToModelMessages(messages),
-    tools: chatTools,
+    tools: toolsWithUserContext,
   });
 
   // On renvoie le flux (streaming) vers le frontend pour l'effet "machine à écrire"

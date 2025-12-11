@@ -124,10 +124,15 @@ export async function findRoomByName(roomName: string): Promise<any | null> {
   }
 }
 
-export async function createBooking(roomName: string, date: string, duration: number) {
-  console.log(`Creating meeting for ${roomName} on ${date} for ${duration} minutes.`);
+export async function createBooking(roomName: string, date: string, duration: number, userId?: string) {
+  console.log(`Creating meeting for ${roomName} on ${date} for ${duration} minutes. UserId: ${userId}`);
   
   try {
+    // Vérifier qu'un userId est fourni
+    if (!userId) {
+      return { success: false, message: 'Vous devez être connecté pour réserver.' };
+    }
+
     // Récupérer l'ID de la salle par son nom
     const { data: room, error: roomError } = await supabase
       .from('rooms')
@@ -139,19 +144,13 @@ export async function createBooking(roomName: string, date: string, duration: nu
       return { success: false, message: `Salle "${roomName}" introuvable.` };
     }
 
-    // Récupérer l'user_id de l'utilisateur connecté
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
-      return { success: false, message: 'Vous devez être connecté pour réserver.' };
-    }
-
     // Créer la réservation dans la table meetings
     const { error: meetingError } = await supabase
       .from('meetings')
       .insert([
         {
           room_id: room.id,
-          user_id: user.id,
+          user_id: userId,
           title: 'Réunion réservée via chatbot',
           start_time: date,
           end_time: new Date(new Date(date).getTime() + duration * 60000).toISOString(),
@@ -172,12 +171,11 @@ export async function createBooking(roomName: string, date: string, duration: nu
 }
 
 // Fonction pour rechercher une réunion de l'utilisateur par entreprise/société
-export async function findMeetingByCompany(company: string) {
-  console.log(`Finding meeting for company: ${company}`);
+export async function findMeetingByCompany(company: string, userId?: string) {
+  console.log(`Finding meeting for company: ${company}. UserId: ${userId}`);
   
   try {
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    if (!userId) {
       return { found: false, message: 'Vous devez être connecté.' };
     }
 
@@ -194,7 +192,7 @@ export async function findMeetingByCompany(company: string) {
         room_id,
         rooms(id, name, capacity, location, equipment)
       `)
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .gte('start_time', today)
       .ilike('title', `%${company}%`)
       .limit(1);
@@ -224,12 +222,11 @@ export async function findMeetingByCompany(company: string) {
 }
 
 // Fonction pour mettre à jour une réunion
-export async function updateMeeting(meetingId: string, updates: { start_time?: string; end_time?: string; title?: string }) {
+export async function updateMeeting(meetingId: string, updates: { start_time?: string; end_time?: string; title?: string }, userId?: string) {
   console.log(`Updating meeting ${meetingId}:`, updates);
   
   try {
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    if (!userId) {
       return { success: false, message: 'Vous devez être connecté.' };
     }
 
@@ -244,7 +241,7 @@ export async function updateMeeting(meetingId: string, updates: { start_time?: s
       return { success: false, message: 'Réunion non trouvée.' };
     }
 
-    if (meeting.user_id !== user.id) {
+    if (meeting.user_id !== userId) {
       return { success: false, message: 'Vous ne pouvez modifier que vos propres réunions.' };
     }
 
@@ -287,12 +284,11 @@ export async function updateMeeting(meetingId: string, updates: { start_time?: s
 }
 
 // Fonction pour lister les réunions de l'utilisateur
-export async function getUserMeetings() {
-  console.log(`Fetching user meetings...`);
+export async function getUserMeetings(userId?: string) {
+  console.log(`Fetching user meetings... UserId: ${userId}`);
   
   try {
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    if (!userId) {
       return { meetings: [], message: 'Vous devez être connecté.' };
     }
 
@@ -308,7 +304,7 @@ export async function getUserMeetings() {
         room_id,
         rooms(id, name, location)
       `)
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .gte('start_time', today)
       .order('start_time', { ascending: true })
       .limit(10);
