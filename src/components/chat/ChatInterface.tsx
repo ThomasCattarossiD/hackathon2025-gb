@@ -45,29 +45,26 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
 
     const loadUserProfile = async () => {
         try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user?.email) {
-                const { data: profile } = await supabase
-                    .from('users')
-                    .select('*')
-                    .eq('id', user.id)
-                    .single();
-
-                if (profile) {
-                    setUserProfile({
-                        name: profile.full_name || user.email.split('@')[0],
-                        email: user.email,
-                        avatarUrl: "https://github.com/shadcn.png",
-                        role: "Employé GoodBarber"
-                    });
-                } else {
-                    setUserProfile({
-                        name: user.email.split('@')[0],
-                        email: user.email,
-                        avatarUrl: "https://github.com/shadcn.png",
-                        role: "Employé GoodBarber"
-                    });
-                }
+            // Récupérer l'utilisateur depuis notre système d'authentification (session_token)
+            const res = await fetch('/api/auth/me');
+            if (!res.ok) {
+                setUserProfile({
+                    name: "Utilisateur",
+                    email: "user@goodbarber.com",
+                    avatarUrl: "https://github.com/shadcn.png",
+                    role: "Employé GoodBarber"
+                });
+                return;
+            }
+            
+            const authData = await res.json();
+            if (authData.user) {
+                setUserProfile({
+                    name: authData.user.fullName || authData.user.email.split('@')[0],
+                    email: authData.user.email,
+                    avatarUrl: "https://github.com/shadcn.png",
+                    role: authData.user.society || "Employé GoodBarber"
+                });
             }
         } catch (error) {
             console.error('Erreur chargement profil:', error);
@@ -82,8 +79,15 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
 
     const loadReservations = async () => {
         try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) {
+            // Récupérer l'utilisateur depuis le session_token
+            const res = await fetch('/api/auth/me');
+            if (!res.ok) {
+                setReservations([]);
+                return;
+            }
+            
+            const authData = await res.json();
+            if (!authData.user?.id) {
                 setReservations([]);
                 return;
             }
@@ -98,7 +102,7 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
                     end_time,
                     rooms(name)
                 `)
-                .eq('user_id', user.id)
+                .eq('user_id', authData.user.id)
                 .gte('start_time', today)
                 .order('start_time', { ascending: true })
                 .limit(10);
@@ -109,25 +113,35 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
             }
 
             if (meetings) {
-                const formatted = meetings.map((meeting: Record<string, unknown>) => ({
-                    id: (meeting.id as string).toString(),
-                    roomName: ((meeting.rooms as any)?.name || 'Salle inconnue') as string,
-                    date: new Date(meeting.start_time as string).toLocaleDateString('fr-FR', {
-                        day: '2-digit',
-                        month: 'short',
-                        year: 'numeric'
-                    }),
-                    startTime: new Date(meeting.start_time as string).toLocaleTimeString('fr-FR', {
-                        hour: '2-digit',
-                        minute: '2-digit'
-                    }),
-                    endTime: new Date(meeting.end_time as string).toLocaleTimeString('fr-FR', {
-                        hour: '2-digit',
-                        minute: '2-digit'
-                    }),
-                    status: 'confirmé' as const
-                }));
+                const formatted = meetings.map((meeting: Record<string, unknown>) => {
+                    // Convertir les dates UTC en heure locale Paris (UTC+1)
+                    const startUTC = new Date(meeting.start_time as string);
+                    const endUTC = new Date(meeting.end_time as string);
+                    
+                    return {
+                        id: (meeting.id as string).toString(),
+                        roomName: ((meeting.rooms as any)?.name || 'Salle inconnue') as string,
+                        date: startUTC.toLocaleDateString('fr-FR', {
+                            day: '2-digit',
+                            month: 'short',
+                            year: 'numeric',
+                            timeZone: 'Europe/Paris'
+                        }),
+                        startTime: startUTC.toLocaleTimeString('fr-FR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            timeZone: 'Europe/Paris'
+                        }),
+                        endTime: endUTC.toLocaleTimeString('fr-FR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            timeZone: 'Europe/Paris'
+                        }),
+                        status: 'confirmé' as const
+                    };
+                });
                 setReservations(formatted);
+                console.log('✅ Réservations chargées:', formatted.length);
             }
         } catch (error) {
             console.error('Erreur fetch réservations:', error);
@@ -142,6 +156,17 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollIntoView({ behavior: "smooth" });
+        }
+    }, [messages]);
+
+    // Rafraîchir les réservations après chaque message (pour détecter les nouvelles réservations)
+    useEffect(() => {
+        if (messages.length > 0) {
+            // Attendre un peu pour laisser le temps au backend de traiter la réservation
+            const timer = setTimeout(() => {
+                loadReservations();
+            }, 1000);
+            return () => clearTimeout(timer);
         }
     }, [messages]);
 

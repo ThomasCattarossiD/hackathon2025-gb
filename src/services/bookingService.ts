@@ -145,6 +145,34 @@ export async function createBooking(roomName: string, date: string, duration: nu
     }
 
     // Créer la réservation dans la table meetings
+    // La date reçue est en heure locale de Paris (Europe/Paris timezone)
+    // On doit la convertir en UTC pour stockage en base
+    const localDate = new Date(date);
+    
+    // Créer une date UTC en soustrayant le décalage horaire de Paris
+    // Obtenir le décalage horaire pour Paris (en minutes)
+    const parisFormatter = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Europe/Paris',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+    
+    const parts = parisFormatter.formatToParts(localDate);
+    const parisDateStr = `${parts.find(p => p.type === 'year')?.value}-${parts.find(p => p.type === 'month')?.value}-${parts.find(p => p.type === 'day')?.value}T${parts.find(p => p.type === 'hour')?.value}:${parts.find(p => p.type === 'minute')?.value}:${parts.find(p => p.type === 'second')?.value}`;
+    
+    // Calculer le décalage entre heure locale et Paris timezone
+    const utcDate = new Date(parisDateStr);
+    const offset = localDate.getTime() - utcDate.getTime();
+    const startDateUTC = new Date(localDate.getTime() - offset);
+    const endDateUTC = new Date(startDateUTC.getTime() + duration * 60000);
+    
+    console.log(`📅 Dates: local=${localDate.toISOString()}, startUTC=${startDateUTC.toISOString()}, endUTC=${endDateUTC.toISOString()}, duration=${duration}min`);
+    
     const { error: meetingError } = await supabase
       .from('meetings')
       .insert([
@@ -152,8 +180,8 @@ export async function createBooking(roomName: string, date: string, duration: nu
           room_id: room.id,
           user_id: userId,
           title: 'Réunion réservée via chatbot',
-          start_time: date,
-          end_time: new Date(new Date(date).getTime() + duration * 60000).toISOString(),
+          start_time: startDateUTC.toISOString(),
+          end_time: endDateUTC.toISOString(),
           status: 'confirmed'
         },
       ]);
