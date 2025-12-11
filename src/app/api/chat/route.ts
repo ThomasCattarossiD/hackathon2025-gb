@@ -2,6 +2,7 @@ import { openai } from '@ai-sdk/openai';
 import { convertToModelMessages, streamText, tool } from 'ai';
 import { z } from 'zod';
 import { findAvailableRooms, createBooking } from '@/services/bookingService';
+import { formatRoomsResponse, formatBookingSuccess, formatBookingError } from '@/lib/formatters';
 
 // 1. DÉFINITION DU PROMPT SYSTÈME & DES CONSTANTES
 const SYSTEM_PROMPT = `
@@ -18,19 +19,19 @@ Help employees find and book meeting rooms efficiently.
 4. **Safety:** NEVER confirm a booking without successfully calling the 'createBooking' tool.
 5. **Honesty:** Always use 'checkAvailability' before suggesting a room. Do not guess.
 6. **Fail Gracefully:** If a room is taken, immediately suggest another available room from the list.
+7. **Formatting:** When presenting available rooms to the user, format them clearly with their names, capacity, and equipment.
 
 **WORKFLOWS (IMPORTANT):**
-- **Modification/Cancellation:** If a user wants to modify or cancel a meeting:
-  1. FIRST, call 'getMyBookings' to find the meeting ID.
-  2. Identify the correct meeting based on the user's description (e.g., "the one at 2pm").
-  3. THEN, call 'cancelBooking' or 'rescheduleBooking' with the correct ID.
-- **New Booking:** For new bookings:
-    1. ALWAYS call 'checkAvailability' first.
-    2. If rooms are available, present options to the user.
-    3. ONLY after user confirmation, call 'createBooking'.
+- **Check Availability:** 
+    1. ALWAYS call 'checkAvailability' with the date/time and duration.
+    2. Present the results in a friendly, readable format.
+    3. Ask the user which room they prefer if multiple are available.
+- **New Booking:** 
+    1. Ask for confirmation from the user before booking.
+    2. Call 'createBooking' with the exact room name, date, and duration.
 
 **TONE:**
-Professional, concise, helpful. Short answers are better for mobile users.
+Professional, concise, helpful. Short answers are better for mobile users. Use emojis sparingly.
 `;
 export const maxDuration = 30; // Timeout de sécurité (30s)
 
@@ -77,26 +78,32 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
           try {
             const availableRooms = await findAvailableRooms(date, duration);
 
-            if (availableRooms.length === 0) {
+            if (!availableRooms || availableRooms.length === 0) {
               return {
                 available: false,
-                message: "Aucune salle n'est libre à cet horaire précise. Demande à l'utilisateur s'il veut changer d'heure."
+                message: "Aucune salle n'est libre à cet horaire. Demande à l'utilisateur s'il veut changer d'heure ou de durée.",
+                rooms: []
               };
             }
 
-            // On formate la réponse pour l'IA (JSON stringifié lisible)
+            // Format lisible pour l'IA
+            const roomsList = availableRooms.map(r => ({
+              name: r.name,
+              capacity: r.capacity,
+              equipment: r.equipment || []
+            }));
+
             return {
               available: true,
-              rooms: availableRooms.map(r => ({
-                nom: r.name,
-                capacite: r.capacity,
-                equipements: r.equipment
-              }))
+              message: `${availableRooms.length} salle(s) disponible(s) à ${date} pour ${duration} minutes.`,
+              rooms: roomsList
             };
           } catch (error) {
+            console.error('Erreur check availability:', error);
             return {
+              available: false,
               error: true,
-              message: "Une erreur critique est survenue lors de la vérification de la disponibilité."
+              message: "Erreur lors de la vérification de la disponibilité."
             };
           }
         },
@@ -112,21 +119,15 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
           try {
             const result = await createBooking(roomName, date, duration);
 
-            if (result.success) {
-              return {
-                success: true,
-                message: `SUCCÈS : La salle ${roomName} a été réservée avec succès. Confirme-le à l'utilisateur.`
-              };
-            } else {
-              return {
-                success: false,
-                message: `ÉCHEC : ${result.message}. Dis-le à l'utilisateur et propose une autre solution.`
-              };
-            }
-          } catch (error) {
             return {
-              error: true,
-              message: "Une erreur critique est survenue lors de la tentative de réservation."
+              success: result.success,
+              message: result.message
+            };
+          } catch (error) {
+            console.error('Erreur create booking:', error);
+            return {
+              success: false,
+              message: "Erreur système lors de la réservation."
             };
           }
         },
