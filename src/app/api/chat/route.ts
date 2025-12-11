@@ -1,98 +1,229 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { streamText } from 'ai';
 import { openai } from '@ai-sdk/openai';
-import { convertToModelMessages, streamText } from 'ai';
-import { createToolsWithUserContext } from '@/lib/chatTools';
-import { decodeSessionToken, getUserById } from '@/lib/auth';
-import { NextRequest } from 'next/server';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { z } from 'zod';
+import { tool } from 'ai';
+import * as bookingService from '@/services/bookingService';
+import { format, addMinutes } from 'date-fns';
+import { fr } from 'date-fns/locale';
+import { decodeSessionToken } from '@/lib/auth';
+import { cookies } from 'next/headers';
 
-// 1. CHARGER LE PROMPT DEPUIS LE MARKDOWN
-function loadSystemPrompt(isGuest: boolean, userName?: string): string {
-  try {
-    // Lire le fichier markdown depuis la racine du projet
-    const promptPath = join(process.cwd(), 'SYSTEM_PROMPT_ROOM_BOOKING.md');
-    let promptContent = readFileSync(promptPath, 'utf-8');
+// Load system prompt
+const systemPrompt = readFileSync(join(process.cwd(), 'prompts/main.md'), 'utf-8');
 
-    // Injecter les restrictions de mode invité si nécessaire
-    const guestRestriction = isGuest
-      ? `\n\n**GUEST MODE - LIMITED ACCESS:**
-You are operating in GUEST MODE. You can:
-✓ Show available rooms
-✓ Show room details (location, capacity, equipment)
-✓ Find meetings by company name
-✓ List meetings
-
-But you CANNOT:
-✗ Book a room (require login)
-✗ Modify a meeting (require login)
-✗ See personal meeting details
-
-When a guest asks to book or modify, respond: "This action requires authentication. Please login or register to book rooms."`
-      : `\n\n**AUTHENTICATED USER:**
-User: ${userName || 'Unknown'}
-You have full access to all features:
-✓ Book rooms
-✓ Modify meetings
-✓ List personal meetings
-✓ Find meetings by company`;
-
-    // Ajouter les restrictions à la fin du prompt
-    promptContent += guestRestriction;
-
-    return promptContent;
-  } catch (error) {
-    console.error('❌ Erreur lors du chargement du SYSTEM_PROMPT_ROOM_BOOKING.md:', error);
-    // Fallback minimal si le fichier ne peut pas être chargé
-    return `You are the GoodBarber Workspace Agent for room booking.
-IMPORTANT: You MUST speak ONLY about room reservation, modification, and display. 
-For any other question, respond: "Je suis l'assistant de réservation de salles. Je ne peux t'aider que pour réserver, modifier ou visualiser vos réunions."`;
-  }
+interface Room {
+    id: string;
+    name: string;
+    capacity: number;
+    location: string;
+    equipment: string[];
+    [key: string]: any;
 }
 
-export const maxDuration = 30; // Timeout de sécurité (30s)
-
-// 2. AJUSTEMENT DYNAMIQUE DU PROMPT & RÉCUPÉRATION DES MESSAGES
 export async function POST(req: NextRequest) {
-  // Vérifier l'authentification (mode invité ou authentifié)
-  const sessionToken = req.cookies.get('session_token')?.value;
-  let currentUser = null;
-  let isGuest = false;
+    // --- User Authentication ---
+    const cookieStore = cookies();
+    const sessionToken = cookieStore.get('session_token')?.value;
 
-  if (sessionToken) {
-    const decoded = decodeSessionToken(sessionToken);
-    if (decoded?.userId) {
-      currentUser = await getUserById(decoded.userId);
+    if (!sessionToken) {
+        return new NextResponse('Unauthorized: No session token', { status: 401 });
     }
-  } else {
-    // Mode invité - accès limité
-    isGuest = true;
-  }
 
-  const { messages } = await req.json(); // Récupération de l'historique de conversation
-  const now = new Date();
-  const parisTime = now.toLocaleString('fr-FR', {
-    timeZone: 'Europe/Paris',
-    dateStyle: 'full',
-    timeStyle: 'medium',
-  });
+    const decodedToken = decodeSessionToken(sessionToken);
+    const userId = decodedToken?.userId;
 
-  // Charger le prompt depuis le markdown et injecter les données dynamiques
-  const baseSystemPrompt = loadSystemPrompt(isGuest, currentUser?.fullName);
-  const dynamicSystemPrompt = baseSystemPrompt.replace('{{CURRENT_DATE}}', parisTime);
+    if (!userId) {
+        return new NextResponse('Unauthorized: Invalid session token', { status: 401 });
+    }
 
-  // 3. CRÉER LES TOOLS AVEC ACCÈS AU USERID (contexte d'authentification)
-  // On utilise le userId du currentUser pour les opérations qui l'exigent
-  const toolsWithUserContext = createToolsWithUserContext(currentUser?.id);
+    // --- Tool Definitions (scoped to capture userId) ---
 
-  // 4. APPEL À L'IA AVEC LES OUTILS BACKEND
-  const result = await streamText({
-    model: openai('gpt-4o-mini'), // Modèle rapide et efficace
-    system: dynamicSystemPrompt,
-    messages: convertToModelMessages(messages),
-    tools: toolsWithUserContext,
-  });
+    // TOOL 1: findRoomsByCarac
+    const findRoomsByCaracSchema = z.object({
+        startTime: z.string().describe('REQUIRED - ISO 8601 date string for the start of the meeting.'),
+        duration: z.number().min(15).describe('REQUIRED - Duration of the meeting in minutes.'),
+        capacity: z.number().optional().describe('Optional capacity of the room.'),
+        equipment: z.array(z.string()).optional().describe('Optional list of equipment required.'),
+        location: z.string().optional().describe('Optional location of the room.'),
+        name: z.string().optional().describe('Optional name of the room.'),
+    });
 
-  // On renvoie le flux (streaming) vers le frontend pour l'effet "machine à écrire"
-  console.log('🤖 Réponse IA en streaming initialisée...');
-  return result.toUIMessageStreamResponse();
+    async function findRoomsByCarac({
+        startTime,
+        duration,
+        capacity,
+        equipment,
+        location,
+        name,
+    }: z.infer<typeof findRoomsByCaracSchema>): Promise<string> {
+        try {
+            const potentialRooms = await bookingService.findRoomsByCharacteristics({
+                capacity,
+                equipment,
+                location,
+                name,
+            });
+
+            if (!potentialRooms || potentialRooms.length === 0) {
+                return '❌ Aucune salle ne correspond à vos critères de base.';
+            }
+
+            const availableRooms: { room: Room; score: number }[] = [];
+
+            for (const room of potentialRooms) {
+                const { available } = await bookingService.checkRoomAvailability(room.id, startTime, duration);
+                if (available) {
+                    let score = 0;
+                    if (equipment && room.equipment) {
+                        score += equipment.filter(e => room.equipment.includes(e)).length * 10;
+                    }
+                    if (capacity && room.capacity) {
+                        const capacityDiff = room.capacity - capacity;
+                        if (capacityDiff >= 0) {
+                            score += 5 - Math.min(capacityDiff / 2, 4);
+                        }
+                    }
+                    if (name && room.name.toLowerCase().includes(name.toLowerCase())) {
+                        score += 3;
+                    }
+                    if (location && room.location.toLowerCase().includes(location.toLowerCase())) {
+                        score += 2;
+                    }
+                    availableRooms.push({ room, score });
+                }
+            }
+
+            if (availableRooms.length === 0) {
+                return '❌ Aucune salle disponible à cet horaire.';
+            }
+
+            availableRooms.sort((a, b) => b.score - a.score);
+
+            const startDate = new Date(startTime);
+            const endDate = addMinutes(startDate, duration);
+            const dateStr = format(startDate, 'dd/MM/yyyy');
+            const startTimeStr = format(startDate, 'HH:mm');
+            const endTimeStr = format(endDate, 'HH:mm');
+
+            const header = `✅ ${availableRooms.length} salle(s) disponible(s) le ${dateStr} de ${startTimeStr} à ${endTimeStr}:\n\n`;
+            const roomList = availableRooms
+                .map(({ room }) => `• **${room.name}** • ${room.capacity} pers • ${room.location}`)
+                .join('\n');
+
+            return header + roomList;
+        } catch (error) {
+            console.error('Error in findRoomsByCarac:', error);
+            return '❌ Une erreur est survenue lors de la recherche de salles.';
+        }
+    }
+
+    // TOOL 2: proposeRoomToUser
+    const proposeRoomToUserSchema = z.object({
+        roomId: z.string().describe('The ID of the room to propose.'),
+        startTime: z.string().describe('ISO 8601 date string for the start of the meeting.'),
+        duration: z.number().describe('Duration of the meeting in minutes.'),
+    });
+
+    async function proposeRoomToUser({
+        roomId,
+        startTime,
+        duration,
+    }: z.infer<typeof proposeRoomToUserSchema>): Promise<string> {
+        try {
+            const { available, room } = await bookingService.checkRoomAvailability(roomId, startTime, duration);
+
+            if (!available || !room) {
+                return "❌ Cette salle n'est plus disponible à cet horaire.";
+            }
+
+            const startDate = new Date(startTime);
+            const endDate = addMinutes(startDate, duration);
+
+            const proposal = `
+✅ **${room.name}**
+
+📅 ${format(startDate, 'dd/MM/yyyy', { locale: fr })}
+⏰ ${format(startDate, 'HH:mm')} à ${format(endDate, 'HH:mm')} (${duration} min)
+📍 ${room.location}
+👥 ${room.capacity} personnes
+🛠️ Équipements: ${room.equipment ? room.equipment.join(', ') : 'N/A'}
+
+Souhaitez-vous réserver cette salle?
+            `.trim();
+
+            return proposal;
+        } catch (error) {
+            console.error('Error in proposeRoomToUser:', error);
+            return '❌ Une erreur est survenue lors de la proposition de la salle.';
+        }
+    }
+
+    // TOOL 3: createMeeting
+    const createMeetingSchema = z.object({
+        roomId: z.string().describe('The ID of the room to book.'),
+        startTime: z.string().describe('ISO 8601 date string for the start of the meeting.'),
+        duration: z.number().describe('Duration of the meeting in minutes.'),
+        title: z.string().optional().describe('Optional title for the meeting.'),
+    });
+
+    async function createMeeting({
+        roomId,
+        startTime,
+        duration,
+    }: z.infer<typeof createMeetingSchema>): Promise<string> {
+        try {
+            const result = await bookingService.createBooking(roomId, startTime, duration, userId);
+
+            if (result.success) {
+                const startDate = new Date(startTime);
+                const endDate = addMinutes(startDate, duration);
+                return `
+✅ **Réservation confirmée!**
+
+📅 ${format(startDate, 'dd/MM/yyyy', { locale: fr })}
+⏰ ${format(startDate, 'HH:mm')} à ${format(endDate, 'HH:mm')}
+
+Votre réunion est réservée!
+                `.trim();
+            } else {
+                return `❌ Impossible de créer la réservation: ${result.message}`;
+            }
+        } catch (error: any) {
+            console.error('Error in createMeeting:', error);
+            return `❌ Impossible de créer la réservation: ${error.message || 'Erreur inconnue'}`;
+        }
+    }
+
+    const chatTools = {
+        findRoomsByCarac: tool({
+            description: 'Find and filter available rooms by criteria. Returns a list of available rooms sorted by relevance.',
+            parameters: findRoomsByCaracSchema,
+            execute: findRoomsByCarac,
+        }),
+        proposeRoomToUser: tool({
+            description: 'Show full room details and ask for confirmation. Re-verifies availability before proposing.',
+            parameters: proposeRoomToUserSchema,
+            execute: proposeRoomToUser,
+        }),
+        createMeeting: tool({
+            description: 'Create the actual booking in the database.',
+            parameters: createMeetingSchema,
+            execute: createMeeting,
+        }),
+    };
+
+    // --- Main API Logic ---
+    const { messages } = await req.json();
+
+    const result = await streamText({
+        model: openai('gpt-4o-mini'),
+        system: systemPrompt,
+        messages,
+        tools: chatTools,
+    });
+
+    return result.toUIMessageStreamResponse();
 }
