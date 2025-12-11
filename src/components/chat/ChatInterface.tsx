@@ -49,7 +49,7 @@ export default function ChatInterface() {
             const { data: { user } } = await supabase.auth.getUser();
             if (user?.email) {
                 const { data: profile } = await supabase
-                    .from('profiles')
+                    .from('users')
                     .select('*')
                     .eq('id', user.id)
                     .single();
@@ -58,7 +58,7 @@ export default function ChatInterface() {
                     setUserProfile({
                         name: profile.full_name || user.email.split('@')[0],
                         email: user.email,
-                        avatarUrl: profile.avatar_url || "https://github.com/shadcn.png",
+                        avatarUrl: "https://github.com/shadcn.png",
                         role: "Employé GoodBarber"
                     });
                 } else {
@@ -90,8 +90,8 @@ export default function ChatInterface() {
             }
 
             const today = new Date().toISOString();
-            const { data: bookings, error } = await supabase
-                .from('bookings')
+            const { data: meetings, error } = await supabase
+                .from('meetings')
                 .select(`
                     id,
                     title,
@@ -109,20 +109,20 @@ export default function ChatInterface() {
                 return;
             }
 
-            if (bookings) {
-                const formatted = bookings.map((booking: any) => ({
-                    id: booking.id.toString(),
-                    roomName: booking.rooms?.name || 'Salle inconnue',
-                    date: new Date(booking.start_time).toLocaleDateString('fr-FR', {
+            if (meetings) {
+                const formatted = meetings.map((meeting: any) => ({
+                    id: meeting.id.toString(),
+                    roomName: meeting.rooms?.name || 'Salle inconnue',
+                    date: new Date(meeting.start_time).toLocaleDateString('fr-FR', {
                         day: '2-digit',
                         month: 'short',
                         year: 'numeric'
                     }),
-                    startTime: new Date(booking.start_time).toLocaleTimeString('fr-FR', {
+                    startTime: new Date(meeting.start_time).toLocaleTimeString('fr-FR', {
                         hour: '2-digit',
                         minute: '2-digit'
                     }),
-                    endTime: new Date(booking.end_time).toLocaleTimeString('fr-FR', {
+                    endTime: new Date(meeting.end_time).toLocaleTimeString('fr-FR', {
                         hour: '2-digit',
                         minute: '2-digit'
                     }),
