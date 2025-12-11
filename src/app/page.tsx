@@ -1,32 +1,31 @@
-import { useChat } from "ai/react"
-import { useEffect, useRef } from "react"
-import { Send, Mic, MapPin, Sparkles, Loader2 } from "lucide-react" // Icônes
+"use client"
+
+import { useChat } from "@ai-sdk/react"
+import { useEffect, useRef, useState } from "react"
+import { Send, Mic, MapPin, Sparkles, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Card } from "@/components/ui/card"
 
 export default function ChatPage() {
-  // Hook Vercel AI SDK : gère tout l'état du chat
-  const { messages, input, handleInputChange, handleSubmit, isLoading } = useChat()
-  
-  // Référence pour scroller automatiquement vers le bas
+  const [input, setInput] = useState("")
+  const { messages, sendMessage, status } = useChat()
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }
-
   useEffect(() => {
-    scrollToBottom()
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    if (!input.trim()) return
+    sendMessage({ text: input })
+    setInput("")
+  }
 
   return (
     <div className="flex flex-col h-[100dvh] bg-slate-50 max-w-md mx-auto shadow-2xl overflow-hidden sm:rounded-xl sm:my-8 sm:h-[800px] sm:border">
-      
-      {/* -------------------------------------------------- */}
-      {/* 1. HEADER (Barre du haut style App Mobile)         */}
-      {/* -------------------------------------------------- */}
+      {/* HEADER */}
       <header className="flex items-center p-4 border-b bg-white z-10 shadow-sm">
         <Avatar className="h-10 w-10 border-2 border-blue-100">
           <AvatarImage src="/bot-avatar.png" alt="Agent" />
@@ -44,19 +43,16 @@ export default function ChatPage() {
         </div>
       </header>
 
-      {/* -------------------------------------------------- */}
-      {/* 2. ZONE DE DISCUSSION (Scrollable)                 */}
-      {/* -------------------------------------------------- */}
+      {/* MESSAGES AREA */}
       <main className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth">
-        
-        {/* État vide (Au début) */}
+        {/* Empty State */}
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center space-y-4 text-slate-500 opacity-80 mt-10">
             <div className="bg-blue-100 p-4 rounded-full">
               <Sparkles className="h-8 w-8 text-blue-600" />
             </div>
             <p className="text-sm">
-              Bonjour ! Je gère les salles de réunion.<br/>
+              Bonjour ! Je gère les salles de réunion.<br />
               Posez-moi une question comme :
             </p>
             <div className="flex flex-col gap-2 text-xs">
@@ -66,89 +62,76 @@ export default function ChatPage() {
           </div>
         )}
 
-        {/* Liste des messages */}
+        {/* Messages List */}
         {messages.map((m) => (
           <div
             key={m.id}
             className={`flex w-full ${m.role === "user" ? "justify-end" : "justify-start"}`}
           >
-            <div className={`
-              relative max-w-[80%] px-4 py-2.5 rounded-2xl text-sm shadow-sm
-              ${m.role === "user" 
-                ? "bg-blue-600 text-white rounded-br-sm" 
-                : "bg-white text-slate-800 border border-slate-100 rounded-bl-sm"}
-            `}>
-              
-              {/* Le texte du message */}
+            <div
+              className={`
+                relative max-w-[80%] px-4 py-2.5 rounded-2xl text-sm shadow-sm
+                ${m.role === "user"
+                  ? "bg-blue-600 text-white rounded-br-sm"
+                  : "bg-white text-slate-800 border border-slate-100 rounded-bl-sm"
+                }
+              `}
+            >
               <div className="whitespace-pre-wrap leading-relaxed">
-                {m.content}
+                {m.parts?.map((p: any, idx: number) =>
+                  p.type === "text" ? (
+                    <span key={idx}>{p.text}</span>
+                  ) : null
+                )}
               </div>
-
-              {/* Affichage visuel si l'IA utilise un outil (Feedback UX) */}
-              {m.toolInvocations?.map((tool) => (
-                <div key={tool.toolCallId} className="mt-2 flex items-center gap-2 text-xs bg-slate-100 text-slate-600 p-2 rounded-lg border border-slate-200">
-                  {tool.toolName === 'checkAvailability' && <MapPin className="h-3 w-3" />}
-                  {tool.toolName === 'createBooking' && <Loader2 className="h-3 w-3 animate-spin" />}
-                  
-                  <span>
-                    {tool.toolName === 'checkAvailability' && "Vérification des dispos..."}
-                    {tool.toolName === 'createBooking' && "Tentative de réservation..."}
-                    {tool.toolName === 'getMyBookings' && "Recherche de vos réunions..."}
-                  </span>
-                </div>
-              ))}
             </div>
           </div>
         ))}
 
-        {/* Indicateur de chargement (quand l'IA écrit) */}
-        {isLoading && messages[messages.length - 1]?.role === "user" && (
+        {/* Loading Indicator */}
+        {status === "streaming" && messages[messages.length - 1]?.role === "user" && (
           <div className="flex justify-start">
-             <div className="bg-white border border-slate-100 px-4 py-3 rounded-2xl rounded-bl-sm shadow-sm flex items-center gap-1">
-                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span>
-             </div>
+            <div className="bg-white border border-slate-100 px-4 py-3 rounded-2xl rounded-bl-sm shadow-sm flex items-center gap-1">
+              <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+              <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+              <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span>
+            </div>
           </div>
         )}
 
-        {/* Ancre invisible pour le scroll */}
         <div ref={messagesEndRef} />
       </main>
 
-      {/* -------------------------------------------------- */}
-      {/* 3. INPUT AREA (Barre du bas)                       */}
-      {/* -------------------------------------------------- */}
+      {/* INPUT AREA */}
       <footer className="p-4 bg-white border-t">
         <form onSubmit={handleSubmit} className="flex gap-2 items-end">
-          
-          {/* Bouton Micro (Visuel pour le MVP) */}
-          <Button 
-            type="button" 
-            variant="outline" 
-            size="icon" 
+          {/* Mic Button */}
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
             className="rounded-full h-10 w-10 shrink-0"
             onClick={() => alert("Le vocal arrive dans la V2 !")}
           >
             <Mic className="h-5 w-5 text-slate-500" />
           </Button>
 
-          {/* Champ Texte */}
+          {/* Input Field */}
           <Input
             value={input}
-            onChange={handleInputChange}
+            onChange={(e) => setInput(e.target.value)}
             placeholder="Écrivez votre demande..."
             className="rounded-full bg-slate-50 border-slate-200 focus-visible:ring-blue-500"
           />
 
-          {/* Bouton Envoyer */}
-          <Button 
-            type="submit" 
-            size="icon" 
+          {/* Send Button */}
+          <Button
+            type="submit"
+            size="icon"
             className="rounded-full h-10 w-10 shrink-0 bg-blue-600 hover:bg-blue-700"
-            disabled={isLoading || !input.trim()}
+            disabled={status === "streaming" || !input.trim()}
           >
-            {isLoading ? (
+            {status === "streaming" ? (
               <Loader2 className="h-5 w-5 animate-spin" />
             ) : (
               <Send className="h-5 w-5" />

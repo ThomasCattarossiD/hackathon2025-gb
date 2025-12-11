@@ -71,7 +71,7 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
       checkAvailability: tool({
         description: 'Vérifie les salles disponibles pour un créneau donné.',
         parameters: availabilityZodObject,
-        execute: async ({ date, duration }: { date: string; duration: number }) => {
+        execute: async ({ date, duration }) => {
           console.log("🤖 IA Check Dispo :", date, duration + "min");
 
           try {
@@ -106,7 +106,7 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
       createBooking: tool({
         description: 'Effectue la réservation ferme d\'une salle.',
         parameters: roomBookingZodObject,
-        execute: async ({ roomName, date, duration }: { roomName: string; date: string; duration: number; success: boolean }) => {
+        execute: async ({ roomName, date, duration }) => {
           console.log("🤖 IA Booking :", roomName, date);
 
           try {
@@ -135,5 +135,5 @@ const dynamicSystemPrompt = SYSTEM_PROMPT.replace('{{CURRENT_DATE}}', parisTime)
   });
 
   // On renvoie le flux (streaming) vers le frontend pour l'effet "machine à écrire"
-  return result.toTextStreamResponse();
+  return result.toAIStreamResponse();
 }
