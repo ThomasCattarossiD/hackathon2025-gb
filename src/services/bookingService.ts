@@ -294,6 +294,13 @@ export interface ProposeRoomResult {
   success: boolean;
   room: Room | null;
   text: string;
+  requiresConfirmation?: boolean;
+  confirmationData?: {
+    roomId: number;
+    roomName: string;
+    startTime: string;
+    duration: number;
+  };
 }
 
 export async function proposeRoomToUser(params: ProposeRoomParams): Promise<ProposeRoomResult> {
@@ -336,16 +343,21 @@ Date: ${formatDate(startDate)}
 Horaire: ${formatTime(startDate)} a ${formatTime(endDate)} (${params.duration} min)
 Lieu: ${location}
 Capacite: ${room.capacity} personnes
-Equipements: ${equipmentList}
-
-Souhaitez-vous reserver cette salle?`;
+Equipements: ${equipmentList}`;
 
     console.log(`[proposeRoomToUser] Room ${room.name} proposed`);
 
     return {
       success: true,
       room: room as Room,
-      text
+      text,
+      requiresConfirmation: true,
+      confirmationData: {
+        roomId: room.id,
+        roomName: room.name,
+        startTime: params.startTime,
+        duration: params.duration
+      }
     };
 
   } catch (error) {
