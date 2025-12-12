@@ -8,6 +8,11 @@ import {
   proposeRoomToUser,
   createMeeting,
   findTeamAvailability,
+  getUserMeetings,
+  updateMeeting,
+  cancelMeeting,
+  findInstantRoom,
+  createRecurringMeeting,
 } from '@/services/bookingService';
 
 export const maxDuration = 30;
@@ -39,8 +44,31 @@ Tu communiques UNIQUEMENT en francais.
 - Date actuelle: ${today} (${dayOfWeek})
 - Les horaires de bureau sont de 9h a 18h, du lundi au vendredi
 
-## CASE 1-3: Reservation avec horaire precis
-Quand l'utilisateur donne une date/heure precise:
+## DETECTION PRIORITAIRE - CASE 9: Reservation Recurrente
+**DETECTE EN PREMIER** si l'utilisateur mentionne:
+- "tous les" (tous les lundis, tous les jours)
+- "chaque" (chaque mardi, chaque semaine)
+- "weekly", "hebdomadaire", "hebdo"
+- "recurrent", "recurring", "serie"
+- "pendant X semaines/mois" (pendant 4 semaines, pendant 1 mois)
+- "toutes les semaines", "toutes les 2 semaines"
+- "standup", "daily", "weekly meeting"
+- un jour de la semaine + "a Xh" + indication de repetition
+
+Exemples CASE 9:
+- "Reserve la salle Zen tous les mardis a 10h" -> CASE 9
+- "Je veux une salle chaque lundi pendant 1 mois" -> CASE 9
+- "Weekly standup pour 6 personnes" -> CASE 9
+- "Reunion hebdomadaire le jeudi" -> CASE 9
+
+Workflow CASE 9:
+1. Collecte: salle ou criteres, jour, heure, duree, frequence, nombre d'occurrences
+2. Appelle findRoomsByCarac puis proposeRoomToUser
+3. Si OUI: appelle createRecurringMeeting (PAS createMeeting!)
+4. Frequences: daily (quotidien), weekly (1x/semaine), biweekly (2 semaines), monthly
+
+## CASE 1-3: Reservation UNIQUE avec horaire precis
+Quand l'utilisateur donne une date/heure precise SANS mention de recurrence:
 1. Appelle findRoomsByCarac pour trouver la meilleure salle
 2. IMMEDIATEMENT apres, appelle proposeRoomToUser avec roomId, startTime et duration
 3. Affiche UNIQUEMENT le resultat de proposeRoomToUser
@@ -54,15 +82,44 @@ Detecte quand l'utilisateur dit: "reunion d'equipe", "meeting d'equipe", "tous e
 3. Affiche les 3 meilleures options avec salle pour chaque creneau
 4. Quand l'utilisateur choisit une option, appelle createMeeting avec les infos du slot choisi
 
+## CASE 5: Modification de reunion
+Detecte quand l'utilisateur dit: "modifier", "decaler", "changer l'heure", "changer de salle", "reporter"
+1. Appelle getUserMeetings pour lister ses reunions
+2. Demande quelle reunion modifier si plusieurs
+3. Demande ce qu'il veut changer (horaire, salle, titre)
+4. Appelle updateMeeting avec les nouvelles valeurs
+
+## CASE 6: Annulation de reunion
+Detecte quand l'utilisateur dit: "annuler", "supprimer", "cancel", "enlever ma reunion"
+1. Appelle getUserMeetings pour lister ses reunions
+2. Demande quelle reunion annuler si plusieurs (utilise l'ID)
+3. Appelle cancelMeeting avec l'ID de la reunion
+
+## CASE 7: Voir mes reunions
+Detecte quand l'utilisateur dit: "mes reunions", "mon planning", "mes reservations", "qu'est-ce que j'ai"
+1. Appelle getUserMeetings
+2. Affiche la liste formatee
+
+## CASE 8: Reservation Express (maintenant)
+Detecte quand l'utilisateur dit: "maintenant", "tout de suite", "urgent", "dans 5 minutes", "une salle libre", "salle dispo"
+1. Appelle findInstantRoom avec les criteres (capacite, equipements, duree)
+2. Propose la meilleure salle disponible immediatement
+3. Si OUI: appelle createMeeting avec startTime = maintenant
+4. Si NON: propose les autres options listees
+
 ## Gestion du refus
 - Garde en memoire les roomIds refuses
 - Rappelle findRoomsByCarac avec excludeRoomIds: [IDs refuses]
 - Propose la salle suivante
 
 ## REGLES CRITIQUES
+- TOUJOURS verifier si c'est une demande recurrente AVANT de traiter comme CASE 1-3
+- Pour recurrence: utiliser createRecurringMeeting, JAMAIS createMeeting
 - Ne JAMAIS afficher le resultat brut de findRoomsByCarac
 - Pour CASE 1-3: TOUJOURS enchainer findRoomsByCarac -> proposeRoomToUser
 - Pour CASE 4: Afficher directement le texte de findTeamAvailability
+- Pour CASE 5-7: Toujours commencer par getUserMeetings
+- Pour CASE 8: Utiliser findInstantRoom (pas findRoomsByCarac)
 - Ne pas reformuler les reponses des outils`;
 }
 
@@ -172,6 +229,114 @@ export async function POST(req: Request) {
               minAvailability: params.minAvailability,
               equipmentNeeded: params.equipmentNeeded,
               society: params.society,
+            });
+          },
+        },
+        getUserMeetings: {
+          description: 'CASE 5-7: Recupere les reunions a venir de l\'utilisateur. Utiliser AVANT de modifier ou annuler une reunion.',
+          inputSchema: z.object({
+            includeHistory: z.boolean().optional().describe('Inclure les reunions passees (defaut: false)'),
+          }),
+          execute: async (params) => {
+            if (!currentUserId) {
+              return {
+                success: false,
+                meetings: [],
+                text: 'Vous devez etre connecte pour voir vos reunions.'
+              };
+            }
+            return await getUserMeetings({
+              userId: currentUserId,
+              includeHistory: params.includeHistory,
+            });
+          },
+        },
+        updateMeeting: {
+          description: 'CASE 5: Modifie une reunion existante (horaire, salle, titre). Utiliser apres getUserMeetings.',
+          inputSchema: z.object({
+            meetingId: z.number().describe('ID de la reunion a modifier (obtenu via getUserMeetings)'),
+            newStartTime: z.string().optional().describe('Nouvel horaire au format ISO (ex: 2025-12-13T15:00:00)'),
+            newDuration: z.number().optional().describe('Nouvelle duree en minutes'),
+            newRoomId: z.number().optional().describe('ID de la nouvelle salle'),
+            newTitle: z.string().optional().describe('Nouveau titre'),
+          }),
+          execute: async (params) => {
+            if (!currentUserId) {
+              return {
+                success: false,
+                text: 'Vous devez etre connecte pour modifier une reunion.'
+              };
+            }
+            return await updateMeeting({
+              meetingId: params.meetingId,
+              userId: currentUserId,
+              newStartTime: params.newStartTime,
+              newDuration: params.newDuration,
+              newRoomId: params.newRoomId,
+              newTitle: params.newTitle,
+            });
+          },
+        },
+        cancelMeeting: {
+          description: 'CASE 6: Annule/supprime une reunion. Utiliser apres getUserMeetings pour connaitre l\'ID.',
+          inputSchema: z.object({
+            meetingId: z.number().describe('ID de la reunion a annuler (obtenu via getUserMeetings)'),
+          }),
+          execute: async (params) => {
+            if (!currentUserId) {
+              return {
+                success: false,
+                text: 'Vous devez etre connecte pour annuler une reunion.'
+              };
+            }
+            return await cancelMeeting({
+              meetingId: params.meetingId,
+              userId: currentUserId,
+            });
+          },
+        },
+        findInstantRoom: {
+          description: 'CASE 8: Reservation Express - Trouve une salle disponible MAINTENANT. Utiliser quand l\'utilisateur dit "maintenant", "urgent", "tout de suite", "une salle libre".',
+          inputSchema: z.object({
+            minCapacity: z.number().optional().describe('Capacite minimum requise'),
+            duration: z.number().optional().describe('Duree souhaitee en minutes (defaut: 30)'),
+            equipments: z.array(z.string()).optional().describe('Equipements requis'),
+          }),
+          execute: async (params) => {
+            return await findInstantRoom({
+              minCapacity: params.minCapacity,
+              duration: params.duration,
+              equipments: params.equipments,
+            });
+          },
+        },
+        createRecurringMeeting: {
+          description: 'PRIORITAIRE pour reservations repetitives! Cree une SERIE de reunions. OBLIGATOIRE quand l\'utilisateur mentionne: "tous les lundis/mardis/etc", "chaque semaine", "weekly", "hebdomadaire", "pendant X semaines", "standup quotidien". NE PAS utiliser createMeeting pour les demandes recurrentes!',
+          inputSchema: z.object({
+            roomId: z.number().describe('ID de la salle (obtenu via findRoomsByCarac)'),
+            title: z.string().describe('Titre de la reunion (ex: Weekly Standup, Reunion hebdo)'),
+            startTime: z.string().describe('Date et heure de la PREMIERE occurrence au format ISO (ex: 2025-12-16T10:00:00 pour lundi prochain a 10h)'),
+            duration: z.number().describe('Duree en minutes (ex: 30, 60)'),
+            recurrencePattern: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).describe('Frequence: "weekly" pour tous les X jours de la semaine, "daily" pour quotidien, "biweekly" pour toutes les 2 semaines, "monthly" pour mensuel'),
+            occurrences: z.number().describe('Nombre de reunions a creer. Ex: "pendant 1 mois" avec weekly = 4, "pendant 4 semaines" = 4'),
+          }),
+          execute: async (params) => {
+            if (!currentUserId) {
+              return {
+                success: false,
+                text: 'Vous devez etre connecte pour creer une serie de reunions.',
+                createdMeetings: [],
+                failedDates: []
+              };
+            }
+            return await createRecurringMeeting({
+              roomId: params.roomId,
+              title: params.title,
+              startTime: params.startTime,
+              duration: params.duration,
+              userId: currentUserId,
+              recurrencePattern: params.recurrencePattern,
+              occurrences: params.occurrences,
             });
           },
         },
