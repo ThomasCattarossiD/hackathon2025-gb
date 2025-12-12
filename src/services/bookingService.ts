@@ -138,6 +138,7 @@ export interface FindRoomsParams {
   maxCapacity?: number;
   equipments?: string[];
   location?: string;
+  floor?: number; // 0=RDC, 1=1er étage, -1=sous-sol, etc.
   startTime?: string;
   duration?: number;
   excludeRoomIds?: number[]; // IDs of rooms already refused by user
@@ -171,6 +172,10 @@ export async function findRoomsByCarac(params: FindRoomsParams): Promise<FindRoo
 
     if (params.location) {
       query = query.ilike('location', `%${params.location}%`);
+    }
+
+    if (params.floor !== undefined) {
+      query = query.eq('floor', params.floor);
     }
 
     const { data: rooms, error } = await query;
