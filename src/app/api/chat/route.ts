@@ -1,6 +1,8 @@
 import { openai } from '@ai-sdk/openai';
 import { streamText, convertToModelMessages } from 'ai';
 import { z } from 'zod';
+import { cookies } from 'next/headers';
+import { decodeSessionToken } from '@/lib/auth';
 import {
   findRoomsByCarac,
   proposeRoomToUser,
@@ -9,6 +11,20 @@ import {
 } from '@/services/bookingService';
 
 export const maxDuration = 30;
+
+// Get current user ID from session cookie
+async function getCurrentUserId(): Promise<string | null> {
+  try {
+    const cookieStore = await cookies();
+    const sessionToken = cookieStore.get('session_token')?.value;
+    if (!sessionToken) return null;
+    
+    const decoded = decodeSessionToken(sessionToken);
+    return decoded?.userId || null;
+  } catch {
+    return null;
+  }
+}
 
 function getSystemPrompt(): string {
   const today = new Date().toISOString().split('T')[0];
@@ -61,6 +77,9 @@ export async function POST(req: Request) {
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
+
+    // Get current user ID from session
+    const currentUserId = await getCurrentUserId();
 
     const modelMessages = convertToModelMessages(messages);
 
@@ -117,15 +136,21 @@ export async function POST(req: Request) {
             title: z.string().describe('Titre de la reunion'),
             startTime: z.string().describe('Debut au format ISO (ex: 2025-12-13T14:30:00)'),
             duration: z.number().describe('Duree en minutes'),
-            userId: z.string().optional().describe('ID utilisateur'),
           }),
           execute: async (params) => {
+            if (!currentUserId) {
+              return {
+                success: false,
+                meetingId: null,
+                text: 'Vous devez etre connecte pour reserver une salle. Veuillez vous connecter.'
+              };
+            }
             return await createMeeting({
               roomId: params.roomId,
               startTime: params.startTime,
               duration: params.duration,
               title: params.title,
-              userId: params.userId || '',
+              userId: currentUserId,
             });
           },
         },

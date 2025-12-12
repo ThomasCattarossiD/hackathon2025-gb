@@ -350,7 +350,10 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
         
         {/* Menu Gauche */}
         <div className="absolute left-4 inset-y-0 flex items-center">
-          <ReservationsSidebar reservations={reservations} />
+          <ReservationsSidebar 
+            reservations={reservations} 
+            onReservationDeleted={loadReservations}
+          />
         </div>
 
         {/* Titre */}

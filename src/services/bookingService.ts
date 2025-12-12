@@ -782,3 +782,67 @@ export async function getUserMeetings(userId: string) {
     return { meetings: [], message: 'Erreur systeme.' };
   }
 }
+
+// ==========================================
+// DELETE MEETING
+// ==========================================
+
+export interface DeleteMeetingResult {
+  success: boolean;
+  message: string;
+}
+
+export async function deleteMeeting(meetingId: number, userId: string): Promise<DeleteMeetingResult> {
+  console.log(`[deleteMeeting] meetingId: ${meetingId}, userId: ${userId}`);
+
+  try {
+    // First verify the meeting belongs to the user
+    const { data: meeting, error: fetchError } = await supabase
+      .from('meetings')
+      .select('id, user_id')
+      .eq('id', meetingId)
+      .single();
+
+    if (fetchError || !meeting) {
+      return {
+        success: false,
+        message: 'Réunion introuvable.'
+      };
+    }
+
+    if (meeting.user_id !== userId) {
+      return {
+        success: false,
+        message: 'Vous ne pouvez supprimer que vos propres réunions.'
+      };
+    }
+
+    // Delete the meeting
+    const { error: deleteError } = await supabase
+      .from('meetings')
+      .delete()
+      .eq('id', meetingId);
+
+    if (deleteError) {
+      console.error('Error deleting meeting:', deleteError);
+      return {
+        success: false,
+        message: 'Erreur lors de la suppression.'
+      };
+    }
+
+    console.log(`[deleteMeeting] Meeting ${meetingId} deleted successfully`);
+
+    return {
+      success: true,
+      message: 'Réunion supprimée avec succès.'
+    };
+
+  } catch (error) {
+    console.error('Error in deleteMeeting:', error);
+    return {
+      success: false,
+      message: 'Erreur système lors de la suppression.'
+    };
+  }
+}
