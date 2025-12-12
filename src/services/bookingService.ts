@@ -1,448 +1,631 @@
 import { supabase } from '@/lib/supabaseClient';
 
-// Fonction utilitaire pour vérifier les conflits de réservation
+// ==========================================
+// TYPES
+// ==========================================
+
+interface Room {
+  id: number;
+  name: string;
+  room_type: string;
+  capacity: number;
+  floor: number | null;
+  location: string | null;
+  description: string | null;
+  equipment: string[];
+  opening_time: string;
+  closing_time: string;
+  pmr_accessible: boolean;
+}
+
+interface AvailableSlot {
+  startTime: string;
+  endTime: string;
+  dayName: string;
+  dateFormatted: string;
+  timeSlot: string;
+  availableCount: number;
+  conflictCount: number;
+  availabilityPercent: number;
+}
+
+// ==========================================
+// HELPER FUNCTIONS
+// ==========================================
+
 async function hasMeetingConflict(roomId: number, startTime: string, endTime: string): Promise<boolean> {
   try {
     const { data: conflicts, error } = await supabase
       .from('meetings')
       .select('id')
       .eq('room_id', roomId)
-      .or(`start_time.lt.${endTime},end_time.gt.${startTime}`)
+      .lt('start_time', endTime)
+      .gt('end_time', startTime)
       .limit(1);
 
     if (error) {
-      console.error('Erreur vérification conflit:', error);
+      console.error('Error checking conflict:', error);
       return false;
     }
 
     return conflicts && conflicts.length > 0;
   } catch (error) {
-    console.error('Erreur check conflict:', error);
+    console.error('Error in hasMeetingConflict:', error);
     return false;
   }
 }
 
-// ==========================================
-// NOUVELLES FONCTIONS SIMPLIFIÉES
-// ==========================================
-
-/**
- * OUTIL 1 : Vérifie si une salle spécifique est disponible
- * @param roomId ID de la salle
- * @param startTime Date/heure de début (ISO 8601)
- * @param duration Durée en minutes
- */
-export async function checkRoomAvailability(roomId: string, startTime: string, duration: number) {
-  console.log(`🔍 Checking availability for room ${roomId} on ${startTime} for ${duration}min`);
-
-  try {
-    const startDate = new Date(startTime);
-    const endDate = new Date(startDate.getTime() + duration * 60000);
-
-    // Récupérer la salle
-    const { data: room, error: roomError } = await supabase
-      .from('rooms')
-      .select('*')
-      .eq('id', roomId)
-      .single();
-
-    if (roomError || !room) {
-      console.error('❌ Salle non trouvée:', roomError);
-      return { available: false, room: null };
-    }
-
-    // Vérifier les conflits
-    const hasConflict = await hasMeetingConflict(room.id, startDate.toISOString(), endDate.toISOString());
-
-    if (hasConflict) {
-      console.log('❌ Conflit horaire trouvé');
-      return { available: false, room };
-    }
-
-    console.log('✅ Salle disponible:', room.name);
-    return { available: true, room };
-  } catch (error) {
-    console.error('❌ Erreur checkRoomAvailability:', error);
-    return { available: false, room: null };
-  }
-}
-
-/**
- * OUTIL 2 : Recherche des salles par caractéristiques
- * @param filters {capacity?, equipment?, location?, name?}
- */
-export async function findRoomsByCharacteristics(filters: {
+function calculateRelevanceScore(room: Room, filters: {
   capacity?: number;
   equipment?: string[];
   location?: string;
   name?: string;
-}) {
-  console.log(`🔍 Searching rooms with filters:`, filters);
+}): number {
+  let score = 0;
+
+  if (filters.equipment && filters.equipment.length > 0) {
+    const roomEquipment = room.equipment || [];
+    for (const eq of filters.equipment) {
+      if (roomEquipment.some(re => re.toLowerCase().includes(eq.toLowerCase()))) {
+        score += 10;
+      }
+    }
+  }
+
+  if (filters.capacity) {
+    const diff = room.capacity - filters.capacity;
+    if (diff >= 0 && diff <= 2) {
+      score += 5;
+    } else if (diff > 2) {
+      score += 2;
+    }
+  }
+
+  if (filters.name && room.name.toLowerCase().includes(filters.name.toLowerCase())) {
+    score += 3;
+  }
+
+  if (filters.location && room.location?.toLowerCase().includes(filters.location.toLowerCase())) {
+    score += 2;
+  }
+
+  return score;
+}
+
+function formatRoomDisplay(room: Room): string {
+  const equipmentList = room.equipment?.join(', ') || 'Aucun';
+  const location = room.location || 'Non specifie';
+  return `- **${room.name}** | ${room.capacity} pers | ${location}\n  Equipements: ${equipmentList}`;
+}
+
+function getDayName(date: Date): string {
+  const days = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
+  return days[date.getDay()];
+}
+
+function formatDate(date: Date): string {
+  return date.toLocaleDateString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  });
+}
+
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+}
+
+// ==========================================
+// TOOL 1: findRoomsByCarac
+// ==========================================
+
+export interface FindRoomsParams {
+  capacity?: number;
+  equipment?: string[];
+  location?: string;
+  name?: string;
+  startTime?: string;
+  duration?: number;
+}
+
+export interface FindRoomsResult {
+  success: boolean;
+  rooms: Room[];
+  text: string;
+}
+
+export async function findRoomsByCarac(params: FindRoomsParams): Promise<FindRoomsResult> {
+  console.log('[findRoomsByCarac] Params:', params);
 
   try {
     let query = supabase.from('rooms').select('*');
 
-    // Filtre par nom (recherche partielle)
-    if (filters.name) {
-      query = query.ilike('name', `%${filters.name}%`);
+    if (params.capacity) {
+      query = query.gte('capacity', params.capacity);
     }
 
-    // Filtre par localisation (recherche partielle)
-    if (filters.location) {
-      query = query.ilike('location', `%${filters.location}%`);
+    if (params.name) {
+      query = query.ilike('name', `%${params.name}%`);
     }
 
-    // Filtre par capacité minimale
-    if (filters.capacity) {
-      query = query.gte('capacity', filters.capacity);
+    if (params.location) {
+      query = query.ilike('location', `%${params.location}%`);
     }
 
     const { data: rooms, error } = await query;
 
     if (error) {
-      console.error('❌ Erreur recherche salles:', error);
-      return [];
+      console.error('Database error:', error);
+      return {
+        success: false,
+        rooms: [],
+        text: 'Erreur lors de la recherche des salles.'
+      };
     }
 
     if (!rooms || rooms.length === 0) {
-      console.log('❌ Aucune salle trouvée');
-      return [];
+      return {
+        success: false,
+        rooms: [],
+        text: 'Aucune salle ne correspond a ces criteres.'
+      };
     }
 
-    // Filtrer par équipement (client-side car array comparison)
-    let filtered = rooms;
-    if (filters.equipment && filters.equipment.length > 0) {
-      filtered = rooms.filter((room) => {
-        const roomEquipment = Array.isArray(room.equipment) ? room.equipment : [];
-        return filters.equipment!.every((eq) =>
-          roomEquipment.some((re: any) => re.toLowerCase().includes(eq.toLowerCase()))
+    let filteredRooms = rooms as Room[];
+    if (params.equipment && params.equipment.length > 0) {
+      filteredRooms = rooms.filter(room => {
+        const roomEquipment = room.equipment || [];
+        return params.equipment!.every(eq =>
+          roomEquipment.some((re: string) => re.toLowerCase().includes(eq.toLowerCase()))
         );
       });
     }
 
-    console.log(`✅ ${filtered.length} salle(s) trouvée(s)`);
-    return filtered;
-  } catch (error) {
-    console.error('❌ Erreur findRoomsByCharacteristics:', error);
-    return [];
-  }
-}
+    if (params.startTime && params.duration) {
+      const startDate = new Date(params.startTime);
+      const endDate = new Date(startDate.getTime() + params.duration * 60000);
+      const endTimeISO = endDate.toISOString();
 
-export async function findAvailableRooms(date: string, duration: number, options?: { capacity?: number; equipment?: string[]; roomName?: string }) {
-  console.log(`Finding available rooms for ${date} with duration ${duration} minutes. Options:`, options);
-  
-  try {
-    // Récupérer toutes les salles actives
-    const { data: rooms, error } = await supabase
-      .from('rooms')
-      .select('*');
-
-    if (error) {
-      console.error('Erreur récupération salles:', error);
-      return [];
-    }
-
-    if (!rooms || rooms.length === 0) {
-      return [];
-    }
-
-    // Calculer end_time
-    const startDate = new Date(date);
-    const endDate = new Date(startDate.getTime() + duration * 60000);
-
-    // Si une salle spécifique est demandée, la chercher en priorité
-    let availableRooms = [];
-    if (options?.roomName) {
-      const specificRoom = rooms.find((r) => r.name.toLowerCase() === options?.roomName?.toLowerCase());
-      if (specificRoom) {
-        const hasConflict = await hasMeetingConflict(specificRoom.id, date, endDate.toISOString());
+      const availableRooms: Room[] = [];
+      for (const room of filteredRooms) {
+        const hasConflict = await hasMeetingConflict(room.id, params.startTime, endTimeISO);
         if (!hasConflict) {
-          availableRooms.push(specificRoom);
+          availableRooms.push(room);
         }
       }
+      filteredRooms = availableRooms;
     }
 
-    // Filtrer les salles : pas de conflit + critères optionnels
-    // (Pour alternatives ou si salle spécifique non trouvée/indisponible)
-    for (const room of rooms) {
-      // Sauter la salle si elle a déjà été ajoutée (salle spécifique)
-      if (availableRooms.some((r) => r.id === room.id)) continue;
-
-      // Vérifier conflit horaire
-      const hasConflict = await hasMeetingConflict(room.id, date, endDate.toISOString());
-      if (hasConflict) continue;
-
-      // Filtrer par capacité si spécifiée
-      if (options?.capacity && room.capacity < options.capacity) {
-        continue;
-      }
-
-      // Filtrer par équipement si spécifié
-      if (options?.equipment && options.equipment.length > 0) {
-        const roomEquipment = Array.isArray(room.equipment) ? room.equipment : [];
-        const hasAllEquipment = options.equipment.every((eq: string) =>
-          roomEquipment.some((re: string) => re.toLowerCase().includes(eq.toLowerCase()))
-        );
-        if (!hasAllEquipment) continue;
-      }
-
-      availableRooms.push(room);
-    }
-
-    // Trier par capacité pour suggérer la salle la plus pertinente
-    availableRooms.sort((a, b) => a.capacity - b.capacity);
-    
-    return availableRooms;
-  } catch (error) {
-    console.error('Erreur find available rooms:', error);
-    return [];
-  }
-}
-
-// Fonction pour rechercher une salle par localisation
-export async function findRoomByLocation(location: string): Promise<any | null> {
-  console.log(`Finding room at location: ${location}`);
-  
-  try {
-    const { data: rooms, error } = await supabase
-      .from('rooms')
-      .select('*')
-      .ilike('location', `%${location}%`)
-      .limit(1);
-
-    if (error) {
-      console.error('Erreur recherche par localisation:', error);
-      return null;
-    }
-
-    return rooms && rooms.length > 0 ? rooms[0] : null;
-  } catch (error) {
-    console.error('Erreur find room by location:', error);
-    return null;
-  }
-}
-
-// Fonction pour rechercher une salle par son nom exact
-export async function findRoomByName(roomName: string): Promise<any | null> {
-  console.log(`Finding room by name: ${roomName}`);
-  
-  try {
-    const { data: rooms, error } = await supabase
-      .from('rooms')
-      .select('*')
-      .ilike('name', roomName)
-      .limit(1);
-
-    if (error) {
-      console.error('Erreur recherche par nom:', error);
-      return null;
-    }
-
-    return rooms && rooms.length > 0 ? rooms[0] : null;
-  } catch (error) {
-    console.error('Erreur find room by name:', error);
-    return null;
-  }
-}
-
-export async function createBooking(roomId: string, date: string, duration: number, userId?: string) {
-  console.log(`Creating meeting for room ${roomId} on ${date} for ${duration} minutes. UserId: ${userId}`);
-  
-  try {
-    // Vérifier qu'un userId est fourni
-    if (!userId) {
-      return { success: false, message: 'Vous devez être connecté pour réserver.' };
-    }
-
-    // Récupérer la salle
-    const { data: room, error: roomError } = await supabase
-      .from('rooms')
-      .select('id, name')
-      .eq('id', roomId)
-      .single();
-
-    if (roomError || !room) {
-      return { success: false, message: `Salle introuvable.` };
-    }
-
-    // Créer la réservation dans la table meetings
-    // La date reçue est en heure locale de Paris (Europe/Paris timezone)
-    // On doit la convertir en UTC pour stockage en base
-    const localDate = new Date(date);
-    
-    // Créer une date UTC en soustrayant le décalage horaire de Paris
-    // Obtenir le décalage horaire pour Paris (en minutes)
-    const parisFormatter = new Intl.DateTimeFormat('fr-FR', {
-      timeZone: 'Europe/Paris',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    });
-    
-    const parts = parisFormatter.formatToParts(localDate);
-    const parisDateStr = `${parts.find(p => p.type === 'year')?.value}-${parts.find(p => p.type === 'month')?.value}-${parts.find(p => p.type === 'day')?.value}T${parts.find(p => p.type === 'hour')?.value}:${parts.find(p => p.type === 'minute')?.value}:${parts.find(p => p.type === 'second')?.value}`;
-    
-    // Calculer le décalage entre heure locale et Paris timezone
-    const utcDate = new Date(parisDateStr);
-    const offset = localDate.getTime() - utcDate.getTime();
-    const startDateUTC = new Date(localDate.getTime() - offset);
-    const endDateUTC = new Date(startDateUTC.getTime() + duration * 60000);
-    
-    console.log(`📅 Dates: local=${localDate.toISOString()}, startUTC=${startDateUTC.toISOString()}, endUTC=${endDateUTC.toISOString()}, duration=${duration}min`);
-    
-    const { error: meetingError } = await supabase
-      .from('meetings')
-      .insert([
-        {
-          room_id: room.id,
-          user_id: userId,
-          title: 'Réunion réservée via chatbot',
-          start_time: startDateUTC.toISOString(),
-          end_time: endDateUTC.toISOString(),
-          status: 'confirmed'
-        },
-      ]);
-
-    if (meetingError) {
-      console.error('Erreur création meeting:', meetingError);
-      return { success: false, message: 'Erreur lors de la réservation.' };
-    }
-
-    return { success: true, message: `Salle "${room.name}" réservée avec succès !` };
-  } catch (error) {
-    console.error('Erreur create meeting:', error);
-    return { success: false, message: 'Erreur système lors de la réservation.' };
-  }
-}
-
-// Fonction pour rechercher une réunion de l'utilisateur par entreprise/société
-export async function findMeetingByCompany(company: string, userId?: string) {
-  console.log(`Finding meeting for company: ${company}. UserId: ${userId}`);
-  
-  try {
-    if (!userId) {
-      return { found: false, message: 'Vous devez être connecté.' };
-    }
-
-    const today = new Date().toISOString();
-    
-    // Chercher une réunion de l'utilisateur aujourd'hui avec cette entreprise dans le titre
-    const { data: meetings, error } = await supabase
-      .from('meetings')
-      .select(`
-        id,
-        title,
-        start_time,
-        end_time,
-        room_id,
-        rooms(id, name, capacity, location, equipment)
-      `)
-      .eq('user_id', userId)
-      .gte('start_time', today)
-      .ilike('title', `%${company}%`)
-      .limit(1);
-
-    if (error) {
-      console.error('Erreur recherche réunion par entreprise:', error);
-      return { found: false, message: 'Erreur lors de la recherche.' };
-    }
-
-    if (!meetings || meetings.length === 0) {
-      return { 
-        found: false, 
-        message: `Aucune réunion trouvée pour l'entreprise "${company}".` 
+    if (filteredRooms.length === 0) {
+      return {
+        success: false,
+        rooms: [],
+        text: 'Aucune salle disponible a cet horaire avec ces criteres.'
       };
     }
 
-    const meeting = meetings[0];
+    filteredRooms.sort((a, b) => {
+      const scoreA = calculateRelevanceScore(a, params);
+      const scoreB = calculateRelevanceScore(b, params);
+      return scoreB - scoreA;
+    });
+
+    const roomsText = filteredRooms.map(room => formatRoomDisplay(room)).join('\n');
+    const text = `${filteredRooms.length} salle(s) disponible(s):\n\n${roomsText}`;
+
+    console.log(`[findRoomsByCarac] Found ${filteredRooms.length} rooms`);
+
     return {
-      found: true,
-      meeting: meeting,
-      message: `Réunion trouvée pour ${company}`
+      success: true,
+      rooms: filteredRooms,
+      text
     };
+
   } catch (error) {
-    console.error('Erreur find meeting by company:', error);
-    return { found: false, message: 'Erreur système.' };
+    console.error('Error in findRoomsByCarac:', error);
+    return {
+      success: false,
+      rooms: [],
+      text: 'Erreur systeme lors de la recherche.'
+    };
   }
 }
 
-// Fonction pour mettre à jour une réunion
-export async function updateMeeting(meetingId: string, updates: { start_time?: string; end_time?: string; title?: string }, userId?: string) {
-  console.log(`Updating meeting ${meetingId}:`, updates);
-  
-  try {
-    if (!userId) {
-      return { success: false, message: 'Vous devez être connecté.' };
-    }
+// ==========================================
+// TOOL 2: proposeRoomToUser
+// ==========================================
 
-    // Vérifier que la réunion appartient à l'utilisateur
-    const { data: meeting, error: fetchError } = await supabase
-      .from('meetings')
-      .select('room_id, user_id')
-      .eq('id', meetingId)
+export interface ProposeRoomParams {
+  roomId: number;
+  startTime: string;
+  duration: number;
+}
+
+export interface ProposeRoomResult {
+  success: boolean;
+  room: Room | null;
+  text: string;
+}
+
+export async function proposeRoomToUser(params: ProposeRoomParams): Promise<ProposeRoomResult> {
+  console.log('[proposeRoomToUser] Params:', params);
+
+  try {
+    const { data: room, error } = await supabase
+      .from('rooms')
+      .select('*')
+      .eq('id', params.roomId)
       .single();
 
-    if (fetchError || !meeting) {
-      return { success: false, message: 'Réunion non trouvée.' };
+    if (error || !room) {
+      console.error('Room not found:', error);
+      return {
+        success: false,
+        room: null,
+        text: 'Cette salle n\'existe pas.'
+      };
     }
 
-    if (meeting.user_id !== userId) {
-      return { success: false, message: 'Vous ne pouvez modifier que vos propres réunions.' };
+    const startDate = new Date(params.startTime);
+    const endDate = new Date(startDate.getTime() + params.duration * 60000);
+
+    const hasConflict = await hasMeetingConflict(room.id, params.startTime, endDate.toISOString());
+    if (hasConflict) {
+      return {
+        success: false,
+        room: room as Room,
+        text: `**${room.name}** n'est pas disponible a cet horaire.`
+      };
     }
 
-    // Si les horaires changent, vérifier les conflits
-    if (updates.start_time && updates.end_time) {
-      // Exclure la réunion actuelle du test de conflit
-      const { data: conflicts, error: conflictError } = await supabase
-        .from('meetings')
-        .select('id')
-        .eq('room_id', meeting.room_id)
-        .neq('id', meetingId)
-        .or(`start_time.lt.${updates.end_time},end_time.gt.${updates.start_time}`)
-        .limit(1);
+    const equipmentList = room.equipment?.join(', ') || 'Aucun';
+    const location = room.location || 'Non specifie';
 
-      if (conflictError) {
-        return { success: false, message: 'Erreur lors de la vérification des conflits.' };
-      }
+    const text = `**${room.name}**
 
-      if (conflicts && conflicts.length > 0) {
-        return { success: false, message: 'Un conflit d\'horaire existe à ces nouvelles heures.' };
-      }
-    }
+Date: ${formatDate(startDate)}
+Horaire: ${formatTime(startDate)} a ${formatTime(endDate)} (${params.duration} min)
+Lieu: ${location}
+Capacite: ${room.capacity} personnes
+Equipements: ${equipmentList}
 
-    // Effectuer la mise à jour
-    const { error: updateError } = await supabase
-      .from('meetings')
-      .update(updates)
-      .eq('id', meetingId);
+Souhaitez-vous reserver cette salle?`;
 
-    if (updateError) {
-      console.error('Erreur mise à jour réunion:', updateError);
-      return { success: false, message: 'Erreur lors de la mise à jour.' };
-    }
+    console.log(`[proposeRoomToUser] Room ${room.name} proposed`);
 
-    return { success: true, message: `Réunion mise à jour avec succès !` };
+    return {
+      success: true,
+      room: room as Room,
+      text
+    };
+
   } catch (error) {
-    console.error('Erreur update meeting:', error);
-    return { success: false, message: 'Erreur système lors de la mise à jour.' };
+    console.error('Error in proposeRoomToUser:', error);
+    return {
+      success: false,
+      room: null,
+      text: 'Erreur systeme lors de l\'affichage de la salle.'
+    };
   }
 }
 
-// Fonction pour lister les réunions de l'utilisateur
-export async function getUserMeetings(userId?: string) {
-  console.log(`Fetching user meetings... UserId: ${userId}`);
-  
+// ==========================================
+// TOOL 3: createMeeting
+// ==========================================
+
+export interface CreateMeetingParams {
+  roomId: number;
+  startTime: string;
+  duration: number;
+  title?: string;
+  userId: string;
+  attendeesCount?: number;
+}
+
+export interface CreateMeetingResult {
+  success: boolean;
+  meetingId: number | null;
+  text: string;
+}
+
+export async function createMeeting(params: CreateMeetingParams): Promise<CreateMeetingResult> {
+  console.log('[createMeeting] Params:', params);
+
   try {
-    if (!userId) {
-      return { meetings: [], message: 'Vous devez être connecté.' };
+    if (!params.userId) {
+      return {
+        success: false,
+        meetingId: null,
+        text: 'Vous devez etre connecte pour reserver une salle.'
+      };
     }
 
+    const { data: room, error: roomError } = await supabase
+      .from('rooms')
+      .select('id, name')
+      .eq('id', params.roomId)
+      .single();
+
+    if (roomError || !room) {
+      return {
+        success: false,
+        meetingId: null,
+        text: 'Salle introuvable.'
+      };
+    }
+
+    const startDate = new Date(params.startTime);
+    const endDate = new Date(startDate.getTime() + params.duration * 60000);
+
+    const hasConflict = await hasMeetingConflict(room.id, params.startTime, endDate.toISOString());
+    if (hasConflict) {
+      return {
+        success: false,
+        meetingId: null,
+        text: `**${room.name}** n'est plus disponible a cet horaire.`
+      };
+    }
+
+    const { data: meeting, error: meetingError } = await supabase
+      .from('meetings')
+      .insert([{
+        room_id: room.id,
+        user_id: params.userId,
+        title: params.title || 'Reunion',
+        start_time: startDate.toISOString(),
+        end_time: endDate.toISOString(),
+        attendees_count: params.attendeesCount || 1,
+        status: 'confirmed'
+      }])
+      .select('id')
+      .single();
+
+    if (meetingError || !meeting) {
+      console.error('Error creating meeting:', meetingError);
+      return {
+        success: false,
+        meetingId: null,
+        text: 'Erreur lors de la creation de la reservation.'
+      };
+    }
+
+    const text = `**Reservation confirmee!**
+
+Date: ${formatDate(startDate)}
+Horaire: ${formatTime(startDate)} a ${formatTime(endDate)}
+Salle: **${room.name}**
+
+Votre reunion est reservee!`;
+
+    console.log(`[createMeeting] Meeting ${meeting.id} created for room ${room.name}`);
+
+    return {
+      success: true,
+      meetingId: meeting.id,
+      text
+    };
+
+  } catch (error) {
+    console.error('Error in createMeeting:', error);
+    return {
+      success: false,
+      meetingId: null,
+      text: 'Erreur systeme lors de la reservation.'
+    };
+  }
+}
+
+// ==========================================
+// TOOL 4: findTeamAvailability
+// ==========================================
+
+export interface FindTeamAvailabilityParams {
+  teamSize: number;
+  dateRange: string;
+  duration?: number;
+  minAvailability?: number;
+  equipmentNeeded?: string[];
+  society?: string;
+}
+
+export interface FindTeamAvailabilityResult {
+  success: boolean;
+  slots: AvailableSlot[];
+  teamSize: number;
+  period: string;
+  text: string;
+}
+
+export async function findTeamAvailability(params: FindTeamAvailabilityParams): Promise<FindTeamAvailabilityResult> {
+  console.log('[findTeamAvailability] Params:', params);
+
+  const duration = params.duration || 60;
+  const minAvailability = params.minAvailability || 70;
+
+  try {
+    const today = new Date();
+    let startDate: Date;
+    let endDate: Date;
+
+    switch (params.dateRange.toLowerCase()) {
+      case 'tomorrow':
+      case 'demain':
+        startDate = new Date(today);
+        startDate.setDate(startDate.getDate() + 1);
+        startDate.setHours(8, 0, 0, 0);
+        endDate = new Date(startDate);
+        endDate.setHours(18, 0, 0, 0);
+        break;
+
+      case 'this-week':
+      case 'cette semaine':
+        startDate = new Date(today);
+        startDate.setHours(8, 0, 0, 0);
+        endDate = new Date(today);
+        endDate.setDate(endDate.getDate() + (7 - endDate.getDay()));
+        endDate.setHours(18, 0, 0, 0);
+        break;
+
+      case 'next-week':
+      case 'semaine prochaine':
+        startDate = new Date(today);
+        startDate.setDate(startDate.getDate() + (8 - startDate.getDay()));
+        startDate.setHours(8, 0, 0, 0);
+        endDate = new Date(startDate);
+        endDate.setDate(endDate.getDate() + 4);
+        endDate.setHours(18, 0, 0, 0);
+        break;
+
+      default:
+        if (params.dateRange.includes(' to ')) {
+          const [start, end] = params.dateRange.split(' to ');
+          startDate = new Date(start);
+          startDate.setHours(8, 0, 0, 0);
+          endDate = new Date(end);
+          endDate.setHours(18, 0, 0, 0);
+        } else {
+          startDate = new Date(params.dateRange);
+          startDate.setHours(8, 0, 0, 0);
+          endDate = new Date(startDate);
+          endDate.setHours(18, 0, 0, 0);
+        }
+    }
+
+    let userQuery = supabase.from('users').select('id');
+    if (params.society) {
+      userQuery = userQuery.eq('society', params.society);
+    }
+    userQuery = userQuery.eq('is_active', true).limit(params.teamSize);
+
+    const { data: users, error: usersError } = await userQuery;
+
+    if (usersError) {
+      console.error('Error fetching users:', usersError);
+      return {
+        success: false,
+        slots: [],
+        teamSize: params.teamSize,
+        period: params.dateRange,
+        text: 'Erreur lors de la recherche des membres de l\'equipe.'
+      };
+    }
+
+    const userIds = users?.map(u => u.id) || [];
+    const actualTeamSize = userIds.length > 0 ? userIds.length : params.teamSize;
+
+    console.log(`Found ${userIds.length} team members for society: ${params.society || 'all'}`);
+
+    const slots: AvailableSlot[] = [];
+    const currentSlot = new Date(startDate);
+
+    while (currentSlot < endDate) {
+      const slotStart = new Date(currentSlot);
+      const slotEnd = new Date(slotStart.getTime() + duration * 60000);
+
+      if (slotStart.getHours() < 8 || slotStart.getHours() >= 18) {
+        currentSlot.setHours(currentSlot.getHours() + 1);
+        continue;
+      }
+
+      if (slotStart.getDay() === 0 || slotStart.getDay() === 6) {
+        currentSlot.setDate(currentSlot.getDate() + 1);
+        currentSlot.setHours(8, 0, 0, 0);
+        continue;
+      }
+
+      let conflictCount = 0;
+
+      if (userIds.length > 0) {
+        const { data: conflicts, error: conflictError } = await supabase
+          .from('meetings')
+          .select('user_id')
+          .in('user_id', userIds)
+          .lt('start_time', slotEnd.toISOString())
+          .gt('end_time', slotStart.toISOString());
+
+        if (!conflictError && conflicts) {
+          const uniqueConflicts = new Set(conflicts.map(c => c.user_id));
+          conflictCount = uniqueConflicts.size;
+        }
+      }
+
+      const availableCount = actualTeamSize - conflictCount;
+      const availabilityPercent = Math.round((availableCount / actualTeamSize) * 100);
+
+      if (availabilityPercent >= minAvailability) {
+        slots.push({
+          startTime: slotStart.toISOString(),
+          endTime: slotEnd.toISOString(),
+          dayName: getDayName(slotStart),
+          dateFormatted: formatDate(slotStart),
+          timeSlot: `${formatTime(slotStart)}-${formatTime(slotEnd)}`,
+          availableCount,
+          conflictCount,
+          availabilityPercent
+        });
+      }
+
+      currentSlot.setHours(currentSlot.getHours() + 1);
+    }
+
+    slots.sort((a, b) => b.availabilityPercent - a.availabilityPercent);
+    const topSlots = slots.slice(0, 5);
+
+    if (topSlots.length === 0) {
+      return {
+        success: false,
+        slots: [],
+        teamSize: actualTeamSize,
+        period: params.dateRange,
+        text: `Aucun creneau trouve avec au moins ${minAvailability}% de disponibilite pour l'equipe de ${actualTeamSize} personnes.`
+      };
+    }
+
+    const slotsText = topSlots.map((slot, index) => {
+      const recommended = index === 0 ? ' (RECOMMANDE)' : '';
+      return `**${slot.dayName} ${slot.dateFormatted}**${recommended}
+   Horaire: ${slot.timeSlot}
+   Disponibles: ${slot.availableCount}/${actualTeamSize} (${slot.availabilityPercent}%)`;
+    }).join('\n\n');
+
+    const text = `Voici les ${topSlots.length} meilleurs creneaux pour votre equipe de ${actualTeamSize} personnes:\n\n${slotsText}`;
+
+    console.log(`[findTeamAvailability] Found ${topSlots.length} slots`);
+
+    return {
+      success: true,
+      slots: topSlots,
+      teamSize: actualTeamSize,
+      period: params.dateRange,
+      text
+    };
+
+  } catch (error) {
+    console.error('Error in findTeamAvailability:', error);
+    return {
+      success: false,
+      slots: [],
+      teamSize: params.teamSize,
+      period: params.dateRange,
+      text: 'Erreur systeme lors de l\'analyse des disponibilites.'
+    };
+  }
+}
+
+// ==========================================
+// HELPER: Get user's meetings
+// ==========================================
+
+export async function getUserMeetings(userId: string) {
+  console.log(`[getUserMeetings] userId: ${userId}`);
+
+  try {
     const today = new Date().toISOString();
-    
+
     const { data: meetings, error } = await supabase
       .from('meetings')
       .select(`
@@ -459,16 +642,19 @@ export async function getUserMeetings(userId?: string) {
       .limit(10);
 
     if (error) {
-      console.error('Erreur chargement réunions:', error);
-      return { meetings: [], message: 'Erreur lors du chargement.' };
+      console.error('Error fetching meetings:', error);
+      return { meetings: [], message: 'Erreur lors du chargement des reunions.' };
     }
 
-    return { 
-      meetings: meetings || [], 
-      message: meetings && meetings.length > 0 ? 'Réunions trouvées' : 'Aucune réunion prévue'
+    return {
+      meetings: meetings || [],
+      message: meetings && meetings.length > 0 
+        ? `${meetings.length} reunion(s) a venir` 
+        : 'Aucune reunion prevue'
     };
+
   } catch (error) {
-    console.error('Erreur get user meetings:', error);
-    return { meetings: [], message: 'Erreur système.' };
+    console.error('Error in getUserMeetings:', error);
+    return { meetings: [], message: 'Erreur systeme.' };
   }
 }
