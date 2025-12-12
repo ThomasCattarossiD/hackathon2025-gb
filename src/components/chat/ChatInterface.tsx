@@ -67,7 +67,9 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
     const loadUserProfile = async () => {
         try {
             // Récupérer l'utilisateur depuis notre système d'authentification (session_token)
-            const res = await fetch('/api/auth/me');
+            const res = await fetch('/api/auth/me', {
+                credentials: 'include',
+            });
             if (!res.ok) {
                 setUserProfile({
                     name: "Utilisateur",
@@ -101,7 +103,9 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
     const loadReservations = async () => {
         try {
             // Récupérer l'utilisateur depuis le session_token
-            const res = await fetch('/api/auth/me');
+            const res = await fetch('/api/auth/me', {
+                credentials: 'include',
+            });
             if (!res.ok) {
                 setReservations([]);
                 return;
@@ -223,6 +227,8 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
       // On ne lit QUE les messages de l'assistant
       if (last.role !== "assistant") return;
 
+      if (last.id === "welcome-message") return; 
+
       // Récupérer le texte final consolidé
       const fullText = last.parts
           ?.map((p: any) => {
@@ -240,6 +246,34 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
           speakText(cleanText);
       }
     }, [messages, voices, isSoundEnabled]); // Ajout de isSoundEnabled dans les dépendances
+
+    useEffect(() => {
+        if (!isSoundEnabled) {
+            window.speechSynthesis.cancel();
+            setIsSpeaking(false);
+        }
+    }, [isSoundEnabled]);
+
+    useEffect(() => {
+        // On vérifie si la liste est vide pour ne pas écraser une conversation en cours
+        if (messages.length === 0) {
+            setMessages([
+                {
+                    id: "welcome-message", // ID fixe pour pouvoir l'identifier
+                    role: "assistant",
+                    content: "Message d'accueil", // Fallback
+                    createdAt: new Date(),
+                    // Important : on structure 'parts' comme le reste de ton app l'attend
+                    parts: [
+                        { 
+                            type: "text", 
+                            text: "👋 **Bonjour ! Je suis RoomBarber.**\n\nJe suis là pour vous aider à trouver et réserver une salle de réunion." 
+                        }
+                    ]
+                } as any
+            ]);
+        }
+    }, []);
 
     const handleSend = () => {
         if (!input.trim()) return;
