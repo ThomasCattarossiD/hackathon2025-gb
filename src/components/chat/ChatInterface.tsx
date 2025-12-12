@@ -216,27 +216,30 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
     }, []);
 
     useEffect(() => {
-    if (!messages.length) return;
+      if (!messages.length) return;
 
-    const last = messages[messages.length - 1];
+      const last = messages[messages.length - 1];
 
-    // On ne lit QUE les messages de l'assistant
-    if (last.role !== "assistant") return;
+      // On ne lit QUE les messages de l'assistant
+      if (last.role !== "assistant") return;
 
-    // Récupérer le texte final consolidé
-    const fullText = last.parts
-        ?.map((p: any) => {
-            if (p.type === "text") return p.text;
-            if (p.type?.startsWith("tool-") && p.output?.text) return p.output.text;
-            return "";
-        })
-        .join("\n")
-        .trim();
+      // Récupérer le texte final consolidé
+      const fullText = last.parts
+          ?.map((p: any) => {
+              if (p.type === "text") return p.text;
+              if (p.type?.startsWith("tool-") && p.output?.text) return p.output.text;
+              return "";
+          })
+          .join("\n")
+          .trim();
 
-    if (fullText && isSoundEnabled) {
-        speakText(fullText);
-    }
-  }, [messages, voices]);
+      if (fullText && isSoundEnabled) {
+          // --- MODIFICATION ICI ---
+          // On transforme le texte avant de le lire
+          const cleanText = processTextForTTS(fullText);
+          speakText(cleanText);
+      }
+    }, [messages, voices, isSoundEnabled]); // Ajout de isSoundEnabled dans les dépendances
 
     const handleSend = () => {
         if (!input.trim()) return;
@@ -365,6 +368,50 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
             handleSend();
         }
     };
+
+    // Fonction pour transformer le texte brut de l'IA en texte naturel pour la voix
+  const processTextForTTS = (text: string): string => {
+      // 1. Détection : Est-ce une proposition de salle formatée ?
+      if (text.includes("✅") && text.includes("⏰") && text.includes("📅")) {
+          try {
+              // Extraction des données via Regex
+              const name = text.match(/✅\s*(.*?)\s*🆔/)?.[1]?.trim() || "une salle";
+              const dateStr = text.match(/📅\s*(\d{2}\/\d{2}\/\d{4})/)?.[1]; // ex: 13/12/2025
+              const timeMatch = text.match(/⏰\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/);
+              
+              let spokenDate = "ce jour";
+              
+              // Conversion de la date (13/12/2025 -> "13 décembre")
+              if (dateStr) {
+                  const [day, month, year] = dateStr.split('/').map(Number);
+                  const dateObj = new Date(year, month - 1, day);
+                  spokenDate = dateObj.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' });
+              }
+
+              // Construction de la phrase naturelle
+              if (timeMatch) {
+                  const start = timeMatch[1].replace(':', ' heure ');
+                  const end = timeMatch[2].replace(':', ' heure ');
+                  return `J'ai trouvé la salle ${name.replace(/^\*+/, "").replace(/\*+$/, "")}. Elle est disponible le ${spokenDate}, de ${start} à ${end}. Souhaitez-vous la réserver ?`;
+              }
+          } catch (e) {
+              console.error("Erreur parsing TTS", e);
+          }
+      }
+
+      // 2. Si ce n'est pas une proposition, nettoyage standard
+      return text
+          // Enlève le Markdown gras/italique (**mot**, *mot*)
+          .replace(/(\*\*|__)(.*?)\1/g, '$2')
+          .replace(/(\*|_)(.*?)\1/g, '$2')
+          // Enlève les liens [texte](url) -> texte
+          .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+          // Enlève les émojis courants utilisés par le bot
+          .replace(/[✅🆔📍👥🛠️📅⏰👋🛑❌👉]/g, '')
+          // Nettoie les espaces multiples créés par la suppression
+          .trim()
+          .replace(/\s+/g, ' ');
+  };
 
   return (
     <div className="flex flex-col h-full w-full bg-background text-foreground md:w-[30%] mx-auto">
