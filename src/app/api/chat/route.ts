@@ -76,11 +76,13 @@ Quand l'utilisateur donne une date/heure precise SANS mention de recurrence:
 5. Si NON: rappelle findRoomsByCarac avec excludeRoomIds contenant l'ID refuse
 
 ## CASE 4: Reunion d'equipe (pas d'horaire precis)
-Detecte quand l'utilisateur dit: "reunion d'equipe", "meeting d'equipe", "tous ensemble", "trouver un creneau"
-1. Demande les infos manquantes: taille equipe, equipements, duree, periode (demain/cette semaine/etc)
-2. Appelle findTeamAvailability avec teamSize, dateRange, duration, equipmentNeeded
-3. Affiche les 3 meilleures options avec salle pour chaque creneau
-4. Quand l'utilisateur choisit une option, appelle createMeeting avec les infos du slot choisi
+Detecte quand l'utilisateur dit: "reunion d'equipe", "meeting d'equipe", "tous ensemble", "trouver un creneau pour [equipe]"
+1. Demande les infos manquantes: nom de l'equipe (societe), equipements, duree, periode (demain/cette semaine/semaine prochaine/du X au Y)
+2. Appelle findTeamAvailability avec teamName, dateRange, duration, equipmentNeeded
+3. Affiche le meilleur creneau avec la salle proposee (le resultat contient requiresConfirmation: true)
+4. IMPORTANT: Quand l'utilisateur confirme (ex: "oui", "ok", "je reserve", "c'est bon"):
+   - Extrait les informations du slot depuis le resultat precedent de findTeamAvailability (slots[0])
+   - Appelle createMeeting avec: roomId (slots[0].room.id), startTime (slots[0].startTime), endTime (slots[0].endTime), title (ex: "Reunion equipe [teamName]"), userId
 
 ## CASE 5: Modification de reunion
 Detecte quand l'utilisateur dit: "modifier", "decaler", "changer l'heure", "changer de salle", "reporter"
@@ -149,8 +151,7 @@ export async function POST(req: Request) {
           description: 'ETAPE 1: Recherche la meilleure salle selon les criteres. Retourne roomId, startTime et duration. NE PAS afficher le resultat. TOUJOURS enchainer avec proposeRoomToUser. Si l\'utilisateur refuse, rappeler avec excludeRoomIds.',
           inputSchema: z.object({
             name: z.string().optional().describe('Nom de la salle (ex: Aquarium, Zen, Creative)'),
-            minCapacity: z.number().optional().describe('Capacite minimum requise'),
-            maxCapacity: z.number().optional().describe('Capacite maximum souhaitee'),
+            minCapacity: z.number().optional().describe('Capacite minimum requise (nombre de personnes)'),
             equipments: z.array(z.string()).optional().describe('Equipements requis'),
             location: z.string().optional().describe('Zone ou description du lieu'),
             floor: z.number().optional().describe('Etage: 0=RDC, 1=1er etage, 2=2eme etage, -1=sous-sol. Utiliser quand l\'utilisateur mentionne un etage specifique'),
@@ -213,23 +214,21 @@ export async function POST(req: Request) {
           },
         },
         findTeamAvailability: {
-          description: 'CASE 4: Trouve les meilleurs creneaux pour une reunion d\'equipe. Analyse les calendriers et propose les 3 meilleures options avec une salle pour chaque creneau.',
+          description: 'CASE 4: Trouve les meilleurs creneaux pour une reunion d\'equipe. Recherche les membres par nom d\'equipe (societe) et analyse leurs calendriers.',
           inputSchema: z.object({
-            teamSize: z.number().describe('Nombre de personnes dans l\'equipe'),
-            dateRange: z.string().describe('Plage de dates: "demain", "cette semaine", "semaine prochaine", ou "YYYY-MM-DD to YYYY-MM-DD"'),
+            teamName: z.string().describe('Nom de l\'equipe/societe (ex: "GoodBarber", "Marketing")'),
+            dateRange: z.string().describe('Plage de dates: "demain", "cette semaine", "semaine prochaine", ou "du X au Y"'),
             duration: z.number().optional().describe('Duree de la reunion en minutes (defaut: 60)'),
             minAvailability: z.number().optional().describe('Pourcentage minimum de disponibilite (defaut: 70)'),
             equipmentNeeded: z.array(z.string()).optional().describe('Equipements requis'),
-            society: z.string().optional().describe('Societe/equipe a filtrer'),
           }),
           execute: async (params) => {
             return await findTeamAvailability({
-              teamSize: params.teamSize,
+              teamName: params.teamName,
               dateRange: params.dateRange,
               duration: params.duration,
               minAvailability: params.minAvailability,
               equipmentNeeded: params.equipmentNeeded,
-              society: params.society,
             });
           },
         },
