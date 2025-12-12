@@ -124,18 +124,22 @@ function formatTime(date: Date): string {
 // ==========================================
 
 export interface FindRoomsParams {
-  capacity?: number;
-  equipment?: string[];
-  location?: string;
   name?: string;
+  minCapacity?: number;
+  maxCapacity?: number;
+  equipments?: string[];
+  location?: string;
   startTime?: string;
   duration?: number;
+  excludeRoomIds?: number[]; // IDs of rooms already refused by user
 }
 
 export interface FindRoomsResult {
   success: boolean;
   rooms: Room[];
   text: string;
+  roomId?: number; // ID of the best room for easy access
+  allRoomIds?: number[]; // All matching room IDs for fallback proposals
 }
 
 export async function findRoomsByCarac(params: FindRoomsParams): Promise<FindRoomsResult> {
@@ -144,8 +148,12 @@ export async function findRoomsByCarac(params: FindRoomsParams): Promise<FindRoo
   try {
     let query = supabase.from('rooms').select('*');
 
-    if (params.capacity) {
-      query = query.gte('capacity', params.capacity);
+    if (params.minCapacity) {
+      query = query.gte('capacity', params.minCapacity);
+    }
+
+    if (params.maxCapacity) {
+      query = query.lte('capacity', params.maxCapacity);
     }
 
     if (params.name) {
@@ -176,10 +184,10 @@ export async function findRoomsByCarac(params: FindRoomsParams): Promise<FindRoo
     }
 
     let filteredRooms = rooms as Room[];
-    if (params.equipment && params.equipment.length > 0) {
+    if (params.equipments && params.equipments.length > 0) {
       filteredRooms = rooms.filter(room => {
         const roomEquipment = room.equipment || [];
-        return params.equipment!.every(eq =>
+        return params.equipments!.every((eq: string) =>
           roomEquipment.some((re: string) => re.toLowerCase().includes(eq.toLowerCase()))
         );
       });
@@ -200,11 +208,16 @@ export async function findRoomsByCarac(params: FindRoomsParams): Promise<FindRoo
       filteredRooms = availableRooms;
     }
 
+    // Exclude rooms already refused by user
+    if (params.excludeRoomIds && params.excludeRoomIds.length > 0) {
+      filteredRooms = filteredRooms.filter(room => !params.excludeRoomIds!.includes(room.id));
+    }
+
     if (filteredRooms.length === 0) {
       return {
         success: false,
         rooms: [],
-        text: 'Aucune salle disponible a cet horaire avec ces criteres.'
+        text: 'Aucune autre salle disponible avec ces criteres.'
       };
     }
 
@@ -214,15 +227,38 @@ export async function findRoomsByCarac(params: FindRoomsParams): Promise<FindRoo
       return scoreB - scoreA;
     });
 
-    const roomsText = filteredRooms.map(room => formatRoomDisplay(room)).join('\n');
-    const text = `${filteredRooms.length} salle(s) disponible(s):\n\n${roomsText}`;
+    // Store all room IDs for fallback proposals
+    const allRoomIds = filteredRooms.map(r => r.id);
 
-    console.log(`[findRoomsByCarac] Found ${filteredRooms.length} rooms`);
+    // Return only the best room with a direct booking request
+    const bestRoom = filteredRooms[0];
+    const equipmentList = bestRoom.equipment?.join(', ') || 'Aucun';
+    const location = bestRoom.location || 'Non specifie';
+    
+    // Format time info if provided
+    let timeInfo = '';
+    if (params.startTime && params.duration) {
+      const startDate = new Date(params.startTime);
+      const endDate = new Date(startDate.getTime() + params.duration * 60000);
+      timeInfo = `\n📅 ${getDayName(startDate)} ${formatDate(startDate)}\n⏰ ${formatTime(startDate)} - ${formatTime(endDate)} (${params.duration} min)`;
+    }
+
+    const text = `✅ **${bestRoom.name}**
+🆔 ID: ${bestRoom.id}
+📍 ${location}
+👥 Capacite: ${bestRoom.capacity} personnes
+🛠️ Equipements: ${equipmentList}${timeInfo}
+
+Souhaites-tu reserver cette salle ?`;
+
+    console.log(`[findRoomsByCarac] Found ${filteredRooms.length} rooms, proposing best: ${bestRoom.name} (ID: ${bestRoom.id})`);
 
     return {
       success: true,
-      rooms: filteredRooms,
-      text
+      rooms: [bestRoom], // Only return the best room with full data including ID
+      text,
+      roomId: bestRoom.id, // Explicitly return the room ID for easy access
+      allRoomIds // All matching room IDs for fallback if user refuses
     };
 
   } catch (error) {
