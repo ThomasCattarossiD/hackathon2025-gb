@@ -23,27 +23,30 @@ Tu communiques UNIQUEMENT en francais.
 - Date actuelle: ${today} (${dayOfWeek})
 - Les horaires de bureau sont de 9h a 18h, du lundi au vendredi
 
-## Workflow OBLIGATOIRE pour une reservation
+## CASE 1-3: Reservation avec horaire precis
+Quand l'utilisateur donne une date/heure precise:
+1. Appelle findRoomsByCarac pour trouver la meilleure salle
+2. IMMEDIATEMENT apres, appelle proposeRoomToUser avec roomId, startTime et duration
+3. Affiche UNIQUEMENT le resultat de proposeRoomToUser
+4. Si OUI: appelle createMeeting
+5. Si NON: rappelle findRoomsByCarac avec excludeRoomIds contenant l'ID refuse
 
-1. L'utilisateur demande une salle
-2. Appelle findRoomsByCarac pour trouver la meilleure salle
-3. IMMEDIATEMENT apres, appelle proposeRoomToUser avec roomId, startTime et duration
-4. Affiche UNIQUEMENT le resultat de proposeRoomToUser
-5. Attends la confirmation de l'utilisateur
-6. Si OUI: appelle createMeeting
-7. Si NON: rappelle findRoomsByCarac avec excludeRoomIds contenant l'ID refuse
+## CASE 4: Reunion d'equipe (pas d'horaire precis)
+Detecte quand l'utilisateur dit: "reunion d'equipe", "meeting d'equipe", "tous ensemble", "trouver un creneau"
+1. Demande les infos manquantes: taille equipe, equipements, duree, periode (demain/cette semaine/etc)
+2. Appelle findTeamAvailability avec teamSize, dateRange, duration, equipmentNeeded
+3. Affiche les 3 meilleures options avec salle pour chaque creneau
+4. Quand l'utilisateur choisit une option, appelle createMeeting avec les infos du slot choisi
 
 ## Gestion du refus
-Quand l'utilisateur refuse une salle:
-- Garde en memoire le roomId refuse
-- Rappelle findRoomsByCarac avec les MEMES criteres + excludeRoomIds: [ID refuse]
-- Propose la salle suivante via proposeRoomToUser
-- Repete jusqu'a acceptation ou plus de salles disponibles
+- Garde en memoire les roomIds refuses
+- Rappelle findRoomsByCarac avec excludeRoomIds: [IDs refuses]
+- Propose la salle suivante
 
 ## REGLES CRITIQUES
-- Ne JAMAIS afficher le resultat de findRoomsByCarac directement
-- TOUJOURS enchainer findRoomsByCarac -> proposeRoomToUser
-- Afficher UNIQUEMENT le texte retourne par proposeRoomToUser
+- Ne JAMAIS afficher le resultat brut de findRoomsByCarac
+- Pour CASE 1-3: TOUJOURS enchainer findRoomsByCarac -> proposeRoomToUser
+- Pour CASE 4: Afficher directement le texte de findTeamAvailability
 - Ne pas reformuler les reponses des outils`;
 }
 
@@ -127,18 +130,24 @@ export async function POST(req: Request) {
           },
         },
         findTeamAvailability: {
-          description: 'Trouve les creneaux ou une equipe est disponible.',
+          description: 'CASE 4: Trouve les meilleurs creneaux pour une reunion d\'equipe. Analyse les calendriers et propose les 3 meilleures options avec une salle pour chaque creneau.',
           inputSchema: z.object({
-            teamMembers: z.array(z.string()).describe('Emails des membres'),
-            date: z.string().describe('Date YYYY-MM-DD'),
-            duration: z.number().describe('Duree en minutes'),
-            preferredTimeRange: z.object({
-              start: z.string().describe('Debut HH:mm'),
-              end: z.string().describe('Fin HH:mm'),
-            }).optional(),
+            teamSize: z.number().describe('Nombre de personnes dans l\'equipe'),
+            dateRange: z.string().describe('Plage de dates: "demain", "cette semaine", "semaine prochaine", ou "YYYY-MM-DD to YYYY-MM-DD"'),
+            duration: z.number().optional().describe('Duree de la reunion en minutes (defaut: 60)'),
+            minAvailability: z.number().optional().describe('Pourcentage minimum de disponibilite (defaut: 70)'),
+            equipmentNeeded: z.array(z.string()).optional().describe('Equipements requis'),
+            society: z.string().optional().describe('Societe/equipe a filtrer'),
           }),
           execute: async (params) => {
-            return await findTeamAvailability(params);
+            return await findTeamAvailability({
+              teamSize: params.teamSize,
+              dateRange: params.dateRange,
+              duration: params.duration,
+              minAvailability: params.minAvailability,
+              equipmentNeeded: params.equipmentNeeded,
+              society: params.society,
+            });
           },
         },
       },

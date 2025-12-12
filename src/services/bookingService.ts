@@ -27,6 +27,15 @@ interface AvailableSlot {
   availableCount: number;
   conflictCount: number;
   availabilityPercent: number;
+  // Room info for this slot
+  room?: {
+    id: number;
+    name: string;
+    capacity: number;
+    location: string | null;
+    equipment: string[];
+  };
+  isRecommended?: boolean;
 }
 
 // ==========================================
@@ -483,6 +492,7 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
   const minAvailability = params.minAvailability || 70;
 
   try {
+    // Parse date range
     const today = new Date();
     let startDate: Date;
     let endDate: Date;
@@ -531,6 +541,7 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
         }
     }
 
+    // Get team members
     let userQuery = supabase.from('users').select('id');
     if (params.society) {
       userQuery = userQuery.eq('society', params.society);
@@ -553,8 +564,9 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
     const userIds = users?.map(u => u.id) || [];
     const actualTeamSize = userIds.length > 0 ? userIds.length : params.teamSize;
 
-    console.log(`Found ${userIds.length} team members for society: ${params.society || 'all'}`);
+    console.log(`[findTeamAvailability] Found ${userIds.length} team members`);
 
+    // Find all available slots
     const slots: AvailableSlot[] = [];
     const currentSlot = new Date(startDate);
 
@@ -562,19 +574,21 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
       const slotStart = new Date(currentSlot);
       const slotEnd = new Date(slotStart.getTime() + duration * 60000);
 
+      // Skip outside business hours
       if (slotStart.getHours() < 8 || slotStart.getHours() >= 18) {
         currentSlot.setHours(currentSlot.getHours() + 1);
         continue;
       }
 
+      // Skip weekends
       if (slotStart.getDay() === 0 || slotStart.getDay() === 6) {
         currentSlot.setDate(currentSlot.getDate() + 1);
         currentSlot.setHours(8, 0, 0, 0);
         continue;
       }
 
+      // Check team conflicts
       let conflictCount = 0;
-
       if (userIds.length > 0) {
         const { data: conflicts, error: conflictError } = await supabase
           .from('meetings')
@@ -608,8 +622,17 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
       currentSlot.setHours(currentSlot.getHours() + 1);
     }
 
-    slots.sort((a, b) => b.availabilityPercent - a.availabilityPercent);
-    const topSlots = slots.slice(0, 5);
+    // Sort by availability and take top 3
+    slots.sort((a, b) => {
+      // First by availability percent
+      if (b.availabilityPercent !== a.availabilityPercent) {
+        return b.availabilityPercent - a.availabilityPercent;
+      }
+      // Then by earliest date
+      return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+    });
+
+    const topSlots = slots.slice(0, 3);
 
     if (topSlots.length === 0) {
       return {
@@ -621,16 +644,81 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
       };
     }
 
+    // For each slot, find the best available room
+    for (let i = 0; i < topSlots.length; i++) {
+      const slot = topSlots[i];
+      
+      // Build room query
+      let roomQuery = supabase
+        .from('rooms')
+        .select('*')
+        .gte('capacity', params.teamSize);
+
+      const { data: rooms, error: roomError } = await roomQuery;
+
+      if (roomError || !rooms || rooms.length === 0) {
+        continue;
+      }
+
+      // Filter by equipment if needed
+      let filteredRooms = rooms as Room[];
+      if (params.equipmentNeeded && params.equipmentNeeded.length > 0) {
+        filteredRooms = rooms.filter(room => {
+          const roomEquipment = room.equipment || [];
+          return params.equipmentNeeded!.every((eq: string) =>
+            roomEquipment.some((re: string) => re.toLowerCase().includes(eq.toLowerCase()))
+          );
+        });
+      }
+
+      // Check room availability for this slot
+      const availableRooms: Room[] = [];
+      for (const room of filteredRooms) {
+        const hasConflict = await hasMeetingConflict(room.id, slot.startTime, slot.endTime);
+        if (!hasConflict) {
+          availableRooms.push(room);
+        }
+      }
+
+      if (availableRooms.length > 0) {
+        // Sort by best fit (closest capacity to team size)
+        availableRooms.sort((a, b) => {
+          const diffA = a.capacity - params.teamSize;
+          const diffB = b.capacity - params.teamSize;
+          return diffA - diffB;
+        });
+
+        const bestRoom = availableRooms[0];
+        slot.room = {
+          id: bestRoom.id,
+          name: bestRoom.name,
+          capacity: bestRoom.capacity,
+          location: bestRoom.location,
+          equipment: bestRoom.equipment || []
+        };
+      }
+
+      // Mark first slot as recommended
+      if (i === 0) {
+        slot.isRecommended = true;
+      }
+    }
+
+    // Build response text
     const slotsText = topSlots.map((slot, index) => {
-      const recommended = index === 0 ? ' (RECOMMANDE)' : '';
-      return `**${slot.dayName} ${slot.dateFormatted}**${recommended}
-   Horaire: ${slot.timeSlot}
-   Disponibles: ${slot.availableCount}/${actualTeamSize} (${slot.availabilityPercent}%)`;
+      const recommended = slot.isRecommended ? ' ⭐ RECOMMANDEE' : '';
+      const roomInfo = slot.room 
+        ? `\n   🏛️ Salle: **${slot.room.name}** (${slot.room.capacity} places)\n   🛠️ ${slot.room.equipment.join(', ') || 'Aucun equipement'}`
+        : '\n   ⚠️ Aucune salle disponible pour ce creneau';
+
+      return `📅 **Option ${index + 1}${recommended}**
+   🕐 ${slot.dayName} ${slot.dateFormatted}, ${slot.timeSlot}
+   👥 ${slot.availableCount}/${actualTeamSize} personnes disponibles (${slot.availabilityPercent}%)${roomInfo}`;
     }).join('\n\n');
 
-    const text = `Voici les ${topSlots.length} meilleurs creneaux pour votre equipe de ${actualTeamSize} personnes:\n\n${slotsText}`;
+    const text = `Voici les ${topSlots.length} meilleurs creneaux pour votre reunion d'equipe de ${actualTeamSize} personnes:\n\n${slotsText}\n\nQuelle option vous convient?`;
 
-    console.log(`[findTeamAvailability] Found ${topSlots.length} slots`);
+    console.log(`[findTeamAvailability] Found ${topSlots.length} slots with rooms`);
 
     return {
       success: true,
