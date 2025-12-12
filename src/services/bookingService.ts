@@ -135,7 +135,6 @@ function formatTime(date: Date): string {
 export interface FindRoomsParams {
   name?: string;
   minCapacity?: number;
-  maxCapacity?: number;
   equipments?: string[];
   location?: string;
   floor?: number; // 0=RDC, 1=1er étage, -1=sous-sol, etc.
@@ -160,10 +159,6 @@ export async function findRoomsByCarac(params: FindRoomsParams): Promise<FindRoo
 
     if (params.minCapacity) {
       query = query.gte('capacity', params.minCapacity);
-    }
-
-    if (params.maxCapacity) {
-      query = query.lte('capacity', params.maxCapacity);
     }
 
     if (params.name) {
@@ -486,20 +481,147 @@ Votre reunion est reservee!`;
 // ==========================================
 
 export interface FindTeamAvailabilityParams {
-  teamSize: number;
-  dateRange: string;
+  teamName: string; // Society name to query users
+  dateRange: string; // "demain", "cette semaine", "semaine prochaine", "du X au Y"
   duration?: number;
   minAvailability?: number;
   equipmentNeeded?: string[];
-  society?: string;
 }
 
 export interface FindTeamAvailabilityResult {
   success: boolean;
   slots: AvailableSlot[];
   teamSize: number;
+  teamName: string;
   period: string;
+  periodFormatted: string;
   text: string;
+  requiresConfirmation?: boolean; // True when user should choose an option
+}
+
+// Helper to parse date range expressions
+// Returns start and end dates with proper business day handling
+function parseDateRange(dateRange: string): { startDate: Date; endDate: Date; periodFormatted: string } {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Reset time to midnight for consistent day calculations
+  
+  let startDate: Date;
+  let endDate: Date;
+  let periodFormatted: string;
+
+  const range = dateRange.toLowerCase().trim();
+
+  // "demain" or "tomorrow"
+  if (range === 'demain' || range === 'tomorrow') {
+    startDate = new Date(today);
+    startDate.setDate(startDate.getDate() + 1);
+    // Skip weekend if tomorrow is Saturday/Sunday
+    while (startDate.getDay() === 0 || startDate.getDay() === 6) {
+      startDate.setDate(startDate.getDate() + 1);
+    }
+    endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 1); // End is next day at 00:00 (exclusive)
+    periodFormatted = `${getDayName(startDate)} ${formatDate(startDate)}`;
+  }
+  // "aujourd'hui" or "today"
+  else if (range === "aujourd'hui" || range === 'aujourdhui' || range === 'today') {
+    startDate = new Date(today);
+    endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 1);
+    periodFormatted = `${getDayName(startDate)} ${formatDate(startDate)}`;
+  }
+  // "cette semaine" or "this week"
+  else if (range === 'cette semaine' || range === 'this week' || range === 'this-week') {
+    startDate = new Date(today);
+    // If today is weekend, start from Monday
+    if (startDate.getDay() === 0) startDate.setDate(startDate.getDate() + 1);
+    if (startDate.getDay() === 6) startDate.setDate(startDate.getDate() + 2);
+    
+    // End at Saturday (exclusive, so includes Friday)
+    endDate = new Date(startDate);
+    const daysUntilSaturday = 6 - endDate.getDay();
+    endDate.setDate(endDate.getDate() + daysUntilSaturday);
+    
+    periodFormatted = `du ${formatDate(startDate)} au ${formatDate(new Date(endDate.getTime() - 86400000))}`;
+  }
+  // "semaine prochaine" or "next week"
+  else if (range === 'semaine prochaine' || range === 'next week' || range === 'next-week') {
+    startDate = new Date(today);
+    // Find next Monday
+    const daysUntilMonday = (8 - startDate.getDay()) % 7 || 7;
+    startDate.setDate(startDate.getDate() + daysUntilMonday);
+    
+    // End at Saturday (exclusive)
+    endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 5); // Saturday after the Monday
+    
+    const fridayDate = new Date(endDate.getTime() - 86400000);
+    periodFormatted = `du ${formatDate(startDate)} au ${formatDate(fridayDate)} (semaine prochaine)`;
+  }
+  // "du X au Y" format (French)
+  else if (range.includes(' au ')) {
+    const match = range.match(/du\s+(\d{1,2})\s+(?:au|à)\s+(\d{1,2})\s*(\w+)?/i);
+    if (match) {
+      const startDay = parseInt(match[1]);
+      const endDay = parseInt(match[2]);
+      const month = match[3];
+      
+      startDate = new Date(today);
+      startDate.setDate(startDay);
+      
+      endDate = new Date(today);
+      endDate.setDate(endDay + 1); // +1 to make end exclusive
+      
+      // Handle month if specified
+      if (month) {
+        const months: Record<string, number> = {
+          'janvier': 0, 'fevrier': 1, 'mars': 2, 'avril': 3, 'mai': 4, 'juin': 5,
+          'juillet': 6, 'aout': 7, 'septembre': 8, 'octobre': 9, 'novembre': 10, 'decembre': 11
+        };
+        const monthNum = months[month.toLowerCase()];
+        if (monthNum !== undefined) {
+          startDate.setMonth(monthNum);
+          endDate.setMonth(monthNum);
+        }
+      }
+      
+      periodFormatted = `du ${formatDate(startDate)} au ${formatDate(new Date(endDate.getTime() - 86400000))}`;
+    } else {
+      // Fallback to this week
+      startDate = new Date(today);
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 5);
+      periodFormatted = `du ${formatDate(startDate)} au ${formatDate(endDate)}`;
+    }
+  }
+  // "X to Y" format (ISO)
+  else if (range.includes(' to ')) {
+    const [start, end] = range.split(' to ');
+    startDate = new Date(start);
+    endDate = new Date(end);
+    endDate.setDate(endDate.getDate() + 1); // Make exclusive
+    periodFormatted = `du ${formatDate(startDate)} au ${formatDate(new Date(endDate.getTime() - 86400000))}`;
+  }
+  // Single date or fallback
+  else {
+    // Try to parse as a date
+    const parsed = new Date(range);
+    if (!isNaN(parsed.getTime())) {
+      startDate = parsed;
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 1);
+      periodFormatted = `${getDayName(startDate)} ${formatDate(startDate)}`;
+    } else {
+      // Default to today
+      startDate = new Date(today);
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 1);
+      periodFormatted = `${getDayName(startDate)} ${formatDate(startDate)}`;
+    }
+  }
+
+  return { startDate, endDate, periodFormatted };
 }
 
 export async function findTeamAvailability(params: FindTeamAvailabilityParams): Promise<FindTeamAvailabilityResult> {
@@ -509,174 +631,194 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
   const minAvailability = params.minAvailability || 70;
 
   try {
-    // Parse date range
-    const today = new Date();
-    let startDate: Date;
-    let endDate: Date;
+    // Parse date range - returns dates at midnight, we'll handle business hours in the loop
+    const { startDate, endDate, periodFormatted } = parseDateRange(params.dateRange);
+    
+    console.log(`[findTeamAvailability] Period: ${periodFormatted}`);
+    console.log(`[findTeamAvailability] Start: ${startDate.toISOString()}, End: ${endDate.toISOString()}`);
 
-    switch (params.dateRange.toLowerCase()) {
-      case 'tomorrow':
-      case 'demain':
-        startDate = new Date(today);
-        startDate.setDate(startDate.getDate() + 1);
-        startDate.setHours(8, 0, 0, 0);
-        endDate = new Date(startDate);
-        endDate.setHours(18, 0, 0, 0);
-        break;
-
-      case 'this-week':
-      case 'cette semaine':
-        startDate = new Date(today);
-        startDate.setHours(8, 0, 0, 0);
-        endDate = new Date(today);
-        endDate.setDate(endDate.getDate() + (7 - endDate.getDay()));
-        endDate.setHours(18, 0, 0, 0);
-        break;
-
-      case 'next-week':
-      case 'semaine prochaine':
-        startDate = new Date(today);
-        startDate.setDate(startDate.getDate() + (8 - startDate.getDay()));
-        startDate.setHours(8, 0, 0, 0);
-        endDate = new Date(startDate);
-        endDate.setDate(endDate.getDate() + 4);
-        endDate.setHours(18, 0, 0, 0);
-        break;
-
-      default:
-        if (params.dateRange.includes(' to ')) {
-          const [start, end] = params.dateRange.split(' to ');
-          startDate = new Date(start);
-          startDate.setHours(8, 0, 0, 0);
-          endDate = new Date(end);
-          endDate.setHours(18, 0, 0, 0);
-        } else {
-          startDate = new Date(params.dateRange);
-          startDate.setHours(8, 0, 0, 0);
-          endDate = new Date(startDate);
-          endDate.setHours(18, 0, 0, 0);
-        }
-    }
-
-    // Get team members
-    let userQuery = supabase.from('users').select('id');
-    if (params.society) {
-      userQuery = userQuery.eq('society', params.society);
-    }
-    userQuery = userQuery.eq('is_active', true).limit(params.teamSize);
-
-    const { data: users, error: usersError } = await userQuery;
+    // Get team members by society name
+    const { data: users, error: usersError } = await supabase
+      .from('users')
+      .select('id, full_name')
+      .eq('society', params.teamName)
+      .eq('is_active', true);
 
     if (usersError) {
       console.error('Error fetching users:', usersError);
       return {
         success: false,
         slots: [],
-        teamSize: params.teamSize,
+        teamSize: 0,
+        teamName: params.teamName,
         period: params.dateRange,
-        text: 'Erreur lors de la recherche des membres de l\'equipe.'
+        periodFormatted,
+        text: `Erreur lors de la recherche des membres de l'equipe "${params.teamName}".`
       };
     }
 
-    const userIds = users?.map(u => u.id) || [];
-    const actualTeamSize = userIds.length > 0 ? userIds.length : params.teamSize;
-
-    console.log(`[findTeamAvailability] Found ${userIds.length} team members`);
-
-    // Find all available slots
-    const slots: AvailableSlot[] = [];
-    const currentSlot = new Date(startDate);
-
-    while (currentSlot < endDate) {
-      const slotStart = new Date(currentSlot);
-      const slotEnd = new Date(slotStart.getTime() + duration * 60000);
-
-      // Skip outside business hours
-      if (slotStart.getHours() < 8 || slotStart.getHours() >= 18) {
-        currentSlot.setHours(currentSlot.getHours() + 1);
-        continue;
-      }
-
-      // Skip weekends
-      if (slotStart.getDay() === 0 || slotStart.getDay() === 6) {
-        currentSlot.setDate(currentSlot.getDate() + 1);
-        currentSlot.setHours(8, 0, 0, 0);
-        continue;
-      }
-
-      // Check team conflicts
-      let conflictCount = 0;
-      if (userIds.length > 0) {
-        const { data: conflicts, error: conflictError } = await supabase
-          .from('meetings')
-          .select('user_id')
-          .in('user_id', userIds)
-          .lt('start_time', slotEnd.toISOString())
-          .gt('end_time', slotStart.toISOString());
-
-        if (!conflictError && conflicts) {
-          const uniqueConflicts = new Set(conflicts.map(c => c.user_id));
-          conflictCount = uniqueConflicts.size;
-        }
-      }
-
-      const availableCount = actualTeamSize - conflictCount;
-      const availabilityPercent = Math.round((availableCount / actualTeamSize) * 100);
-
-      if (availabilityPercent >= minAvailability) {
-        slots.push({
-          startTime: slotStart.toISOString(),
-          endTime: slotEnd.toISOString(),
-          dayName: getDayName(slotStart),
-          dateFormatted: formatDate(slotStart),
-          timeSlot: `${formatTime(slotStart)}-${formatTime(slotEnd)}`,
-          availableCount,
-          conflictCount,
-          availabilityPercent
-        });
-      }
-
-      currentSlot.setHours(currentSlot.getHours() + 1);
-    }
-
-    // Sort by availability and take top 3
-    slots.sort((a, b) => {
-      // First by availability percent
-      if (b.availabilityPercent !== a.availabilityPercent) {
-        return b.availabilityPercent - a.availabilityPercent;
-      }
-      // Then by earliest date
-      return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
-    });
-
-    const topSlots = slots.slice(0, 3);
-
-    if (topSlots.length === 0) {
+    if (!users || users.length === 0) {
       return {
         success: false,
         slots: [],
-        teamSize: actualTeamSize,
+        teamSize: 0,
+        teamName: params.teamName,
         period: params.dateRange,
-        text: `Aucun creneau trouve avec au moins ${minAvailability}% de disponibilite pour l'equipe de ${actualTeamSize} personnes.`
+        periodFormatted,
+        text: `Aucun membre trouve pour l'equipe "${params.teamName}". Verifiez le nom de l'equipe.`
       };
     }
 
-    // For each slot, find the best available room
-    for (let i = 0; i < topSlots.length; i++) {
-      const slot = topSlots[i];
-      
-      // Build room query
-      let roomQuery = supabase
-        .from('rooms')
-        .select('*')
-        .gte('capacity', params.teamSize);
+    const userIds = users.map(u => u.id);
+    const teamSize = users.length;
 
-      const { data: rooms, error: roomError } = await roomQuery;
+    console.log(`[findTeamAvailability] Found ${teamSize} team members for "${params.teamName}":`);
+    users.forEach(u => console.log(`  - ${u.full_name} (${u.id})`));
+    console.log(`[findTeamAvailability] User IDs: ${JSON.stringify(userIds)}`);
 
-      if (roomError || !rooms || rooms.length === 0) {
+    // First, fetch all existing meetings for these users in the date range to understand conflicts
+    const { data: existingMeetings, error: meetingsError } = await supabase
+      .from('meetings')
+      .select('user_id, title, start_time, end_time')
+      .in('user_id', userIds)
+      .gte('start_time', startDate.toISOString())
+      .lt('start_time', endDate.toISOString())
+      .order('start_time');
+
+    if (!meetingsError && existingMeetings && existingMeetings.length > 0) {
+      console.log(`[findTeamAvailability] Existing meetings in period (${existingMeetings.length} total):`);
+      existingMeetings.forEach(m => {
+        const user = users.find(u => u.id === m.user_id);
+        console.log(`  - ${user?.full_name || m.user_id}: "${m.title}" (${m.start_time} - ${m.end_time})`);
+      });
+    } else {
+      console.log(`[findTeamAvailability] No existing meetings found in the period for these users`);
+    }
+
+    // Helper function to check if a meeting overlaps with a time slot
+    const meetingOverlapsSlot = (meeting: { start_time: string; end_time: string }, slotStart: Date, slotEnd: Date): boolean => {
+      const meetingStart = new Date(meeting.start_time);
+      const meetingEnd = new Date(meeting.end_time);
+      // Overlap: meeting starts or ends within the slot, or encompasses the slot
+      const meetingOverlap = (slotStart < meetingStart && meetingStart < slotEnd) || (slotStart < meetingEnd && meetingEnd < slotEnd) || (meetingStart <= slotStart && meetingEnd >= slotEnd);
+      if (meetingOverlap) {
+        console.log(`    Overlap detected: Meeting (${meeting.start_time} - ${meeting.end_time}) with Slot (${slotStart.toISOString()} - ${slotEnd.toISOString()})`);
+      }
+      return meetingOverlap;
+    };
+
+    // Find all available slots by iterating through each day and each hour
+    const slots: AvailableSlot[] = [];
+    const currentDay = new Date(startDate);
+    
+    // Iterate day by day
+    while (currentDay < endDate) {
+      // Skip weekends
+      if (currentDay.getDay() === 0 || currentDay.getDay() === 6) {
+        currentDay.setDate(currentDay.getDate() + 1);
         continue;
       }
 
+      // Iterate through business hours (8h-18h)
+      for (let hour = 8; hour <= 18 - Math.ceil(duration / 60); hour++) {
+        const slotStart = new Date(currentDay);
+        slotStart.setHours(hour, 0, 0, 0);
+        
+        const slotEnd = new Date(slotStart.getTime() + duration * 60000);
+        
+        // Don't go past 18h
+        if (slotEnd.getHours() > 18 || (slotEnd.getHours() === 18 && slotEnd.getMinutes() > 0)) {
+          continue;
+        }
+
+        // Count meetings that overlap with this slot
+        let overlapCount = 0;
+        if (existingMeetings && existingMeetings.length > 0) {
+          for (const meeting of existingMeetings) {
+            if (meetingOverlapsSlot(meeting, slotStart, slotEnd)) {
+              overlapCount++;
+            }
+          }
+        }
+        
+        // Log overlap count for debugging
+        if (overlapCount > 0) {
+          console.log(`[findTeamAvailability] Slot ${formatTime(slotStart)}-${formatTime(slotEnd)} on ${formatDate(slotStart)}: ${overlapCount} overlapping meetings`);
+        }
+
+        // Calculate availability based on overlap count vs team size
+        const availableCount = Math.max(0, teamSize - overlapCount);
+        const availabilityPercent = Math.round((availableCount / teamSize) * 100);
+
+        // Only add slots that meet minimum availability threshold
+        if (availabilityPercent >= minAvailability) {
+          slots.push({
+            startTime: slotStart.toISOString(),
+            endTime: slotEnd.toISOString(),
+            dayName: getDayName(slotStart),
+            dateFormatted: formatDate(slotStart),
+            timeSlot: `${formatTime(slotStart)}-${formatTime(slotEnd)}`,
+            availableCount,
+            conflictCount: overlapCount,
+            availabilityPercent
+          });
+        }
+      }
+
+      // Move to next day
+      currentDay.setDate(currentDay.getDate() + 1);
+    }
+
+    console.log(`[findTeamAvailability] Found ${slots.length} potential slots meeting ${minAvailability}% availability threshold`);
+    
+    // Debug: show conflict counts before sorting
+    const slotsWithConflicts = slots.filter(s => s.conflictCount > 0);
+    console.log(`[findTeamAvailability] Slots with conflicts: ${slotsWithConflicts.length}`);
+    if (slotsWithConflicts.length > 0) {
+      slotsWithConflicts.slice(0, 10).forEach(s => {
+        console.log(`  ⚠️ ${s.dayName} ${s.dateFormatted} ${s.timeSlot} - conflictCount: ${s.conflictCount}`);
+      });
+    }
+
+    // Sort by: 1) least overlaps (ascending), 2) earliest date/time
+    slots.sort((a, b) => {
+      if (a.conflictCount !== b.conflictCount) {
+        return a.conflictCount - b.conflictCount; // Ascending: fewer conflicts = better
+      }
+      return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+    });
+
+    // Log sorted slots
+    if (slots.length > 0) {
+      console.log(`[findTeamAvailability] Best slots (sorted by least overlaps):`);
+      slots.slice(0, 5).forEach((s, i) => {
+        const icon = s.conflictCount === 0 ? '✅' : '📅';
+        console.log(`  ${icon} #${i + 1}: ${s.dayName} ${s.dateFormatted} ${s.timeSlot} - ${s.conflictCount} overlaps (${s.availabilityPercent}%)`);
+      });
+    }
+
+    // Take the best slot (least overlaps)
+    const bestSlot = slots[0];
+
+    if (!bestSlot) {
+      return {
+        success: false,
+        slots: [],
+        teamSize,
+        teamName: params.teamName,
+        period: params.dateRange,
+        periodFormatted,
+        text: `Aucun creneau trouve avec au moins ${minAvailability}% de disponibilite pour l'equipe "${params.teamName}" (${teamSize} personnes).`
+      };
+    }
+
+    // Find the best available room for this slot
+    const { data: rooms, error: roomError } = await supabase
+      .from('rooms')
+      .select('*')
+      .gte('capacity', teamSize);
+
+    if (!roomError && rooms && rooms.length > 0) {
       // Filter by equipment if needed
       let filteredRooms = rooms as Room[];
       if (params.equipmentNeeded && params.equipmentNeeded.length > 0) {
@@ -691,7 +833,7 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
       // Check room availability for this slot
       const availableRooms: Room[] = [];
       for (const room of filteredRooms) {
-        const hasConflict = await hasMeetingConflict(room.id, slot.startTime, slot.endTime);
+        const hasConflict = await hasMeetingConflict(room.id, bestSlot.startTime, bestSlot.endTime);
         if (!hasConflict) {
           availableRooms.push(room);
         }
@@ -700,13 +842,13 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
       if (availableRooms.length > 0) {
         // Sort by best fit (closest capacity to team size)
         availableRooms.sort((a, b) => {
-          const diffA = a.capacity - params.teamSize;
-          const diffB = b.capacity - params.teamSize;
+          const diffA = a.capacity - teamSize;
+          const diffB = b.capacity - teamSize;
           return diffA - diffB;
         });
 
         const bestRoom = availableRooms[0];
-        slot.room = {
+        bestSlot.room = {
           id: bestRoom.id,
           name: bestRoom.name,
           capacity: bestRoom.capacity,
@@ -714,35 +856,29 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
           equipment: bestRoom.equipment || []
         };
       }
-
-      // Mark first slot as recommended
-      if (i === 0) {
-        slot.isRecommended = true;
-      }
     }
 
+    bestSlot.isRecommended = true;
+
     // Build response text
-    const slotsText = topSlots.map((slot, index) => {
-      const recommended = slot.isRecommended ? ' ⭐ RECOMMANDEE' : '';
-      const roomInfo = slot.room 
-        ? `\n   🏛️ Salle: **${slot.room.name}** (${slot.room.capacity} places)\n   🛠️ ${slot.room.equipment.join(', ') || 'Aucun equipement'}`
-        : '\n   ⚠️ Aucune salle disponible pour ce creneau';
+    const memberNames = users.map(u => u.full_name).join(', ');
+    const roomInfo = bestSlot.room 
+      ? `\n🏛️ Salle: **${bestSlot.room.name}** (${bestSlot.room.capacity} places, ${bestSlot.room.location})\n🛠️ Equipements: ${bestSlot.room.equipment.join(', ') || 'Aucun'}`
+      : '\n⚠️ Aucune salle disponible pour ce creneau';
 
-      return `📅 **Option ${index + 1}${recommended}**
-   🕐 ${slot.dayName} ${slot.dateFormatted}, ${slot.timeSlot}
-   👥 ${slot.availableCount}/${actualTeamSize} personnes disponibles (${slot.availabilityPercent}%)${roomInfo}`;
-    }).join('\n\n');
+    const text = `✅ **Meilleur creneau trouve** pour l'equipe "${params.teamName}" (${teamSize} membres):\n\n� **${bestSlot.dayName} ${bestSlot.dateFormatted}**\n🕐 ${bestSlot.timeSlot}\n👥 ${bestSlot.availableCount}/${teamSize} personnes disponibles (${bestSlot.availabilityPercent}%)${roomInfo}\n\nVoulez-vous reserver ce creneau?`;
 
-    const text = `Voici les ${topSlots.length} meilleurs creneaux pour votre reunion d'equipe de ${actualTeamSize} personnes:\n\n${slotsText}\n\nQuelle option vous convient?`;
-
-    console.log(`[findTeamAvailability] Found ${topSlots.length} slots with rooms`);
+    console.log(`[findTeamAvailability] Best slot: ${bestSlot.dayName} ${bestSlot.dateFormatted} ${bestSlot.timeSlot}`);
 
     return {
       success: true,
-      slots: topSlots,
-      teamSize: actualTeamSize,
+      slots: [bestSlot],
+      teamSize,
+      teamName: params.teamName,
       period: params.dateRange,
-      text
+      periodFormatted,
+      text,
+      requiresConfirmation: true
     };
 
   } catch (error) {
@@ -750,8 +886,10 @@ export async function findTeamAvailability(params: FindTeamAvailabilityParams): 
     return {
       success: false,
       slots: [],
-      teamSize: params.teamSize,
+      teamSize: 0,
+      teamName: params.teamName,
       period: params.dateRange,
+      periodFormatted: '',
       text: 'Erreur systeme lors de l\'analyse des disponibilites.'
     };
   }
