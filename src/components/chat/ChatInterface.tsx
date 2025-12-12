@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import React, { useState, useRef, useEffect } from "react";
-import { Send, Mic, Bot, Volume2, VolumeX, User, StopCircle, ArrowDown } from "lucide-react"; // Assure-toi d'avoir lucide-react
+import { Send, Mic, Bot, Volume2, VolumeX, User, StopCircle, ArrowDown, Check, X } from "lucide-react"; // Assure-toi d'avoir lucide-react
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
@@ -51,6 +51,7 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
     const recognitionRef = useRef<any>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [reservations, setReservations] = useState<Reservation[]>([]);
+    const [answeredConfirmations, setAnsweredConfirmations] = useState<Set<string>>(new Set());
 
     const { messages, setMessages, sendMessage, status } = useChat({
         api: "/api/chat",
@@ -316,23 +317,18 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
         setIsSoundEnabled(false);
     };
 
-    const handleReject = (messageId: string) => {
-        setMessages((prevMessages) =>
-            prevMessages.map((msg) =>
-                msg.id === messageId ? { ...msg, actionStatus: "rejected" } : msg
-            )
-        );
-        alert("Salle refusé");
-
+    const handleReject = (messageId: string, roomName?: string) => {
+        // Mark this confirmation as answered
+        setAnsweredConfirmations(prev => new Set(prev).add(messageId));
+        // Send a rejection message to the AI
+        sendMessage({ text: `Non, je ne veux pas de la salle ${roomName || 'proposée'}. Proposez-moi une autre salle.` });
     };
 
-    const handleConfirm = (messageId: string) => {
-        setMessages((prevMessages) =>
-            prevMessages.map((msg) =>
-                msg.id === messageId ? { ...msg, actionStatus: "accepted" } : msg
-            )
-        );
-        alert("Salle réservée");
+    const handleConfirm = (messageId: string, roomName?: string) => {
+        // Mark this confirmation as answered
+        setAnsweredConfirmations(prev => new Set(prev).add(messageId));
+        // Send a confirmation message to the AI
+        sendMessage({ text: `Oui, je confirme la réservation de la salle ${roomName || 'proposée'}.` });
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -350,7 +346,10 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
         
         {/* Menu Gauche */}
         <div className="absolute left-4 inset-y-0 flex items-center">
-          <ReservationsSidebar reservations={reservations} />
+          <ReservationsSidebar 
+            reservations={reservations} 
+            onReservationDeleted={loadReservations}
+          />
         </div>
 
         {/* Titre */}
@@ -489,7 +488,43 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
                           
                           // Afficher les résultats des tool calls (checkAvailability, createBooking, etc.)
                           if (part.type?.startsWith("tool-") && part.output?.text) {
-                            return <ReactMarkdown key={idx}>{part.output.text}</ReactMarkdown>;
+                            const hasConfirmation = part.output?.requiresConfirmation === true;
+                            const confirmationData = part.output?.confirmationData;
+                            const confirmationId = `${message.id}-${idx}`;
+                            const isAnswered = answeredConfirmations.has(confirmationId);
+                            
+                            return (
+                              <div key={idx}>
+                                <ReactMarkdown>{part.output.text}</ReactMarkdown>
+                                {hasConfirmation && !isAnswered && (
+                                  <div className="flex gap-2 mt-3 pt-3 border-t border-border/50">
+                                    <Button
+                                      size="sm"
+                                      variant="default"
+                                      className="flex-1 gap-1"
+                                      onClick={() => handleConfirm(confirmationId, confirmationData?.roomName)}
+                                    >
+                                      <Check size={16} />
+                                      Réserver
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="flex-1 gap-1"
+                                      onClick={() => handleReject(confirmationId, confirmationData?.roomName)}
+                                    >
+                                      <X size={16} />
+                                      Autre salle
+                                    </Button>
+                                  </div>
+                                )}
+                                {hasConfirmation && isAnswered && (
+                                  <div className="text-xs text-muted-foreground/70 mt-2 italic">
+                                    Réponse envoyée
+                                  </div>
+                                )}
+                              </div>
+                            );
                           }
                           
                           return null;

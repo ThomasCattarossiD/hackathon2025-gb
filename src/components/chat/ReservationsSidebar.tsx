@@ -1,8 +1,8 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { 
-  Menu, Calendar, Clock, MapPin, CalendarX, Trash2 
+  Menu, Calendar, Clock, MapPin, CalendarX, Trash2, Loader2 
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
@@ -28,13 +28,41 @@ export type Reservation = {
 
 interface ReservationsSidebarProps {
   reservations: Reservation[];
+  onReservationDeleted?: () => void; // Callback to refresh reservations
 }
 
-const handleDelete = (id: string) => {
-    alert(`Simulation : La réservation ${id} a bien été supprimée.`);
-};
+export default function ReservationsSidebar({ reservations, onReservationDeleted }: ReservationsSidebarProps) {
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-export default function ReservationsSidebar({ reservations }: ReservationsSidebarProps) {
+  const handleDelete = async (id: string) => {
+    if (!confirm('Êtes-vous sûr de vouloir supprimer cette réservation ?')) {
+      return;
+    }
+
+    setDeletingId(id);
+    
+    try {
+      const response = await fetch(`/api/meetings/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        alert(data.error || 'Erreur lors de la suppression');
+        return;
+      }
+
+      // Notify parent to refresh the list
+      if (onReservationDeleted) {
+        onReservationDeleted();
+      }
+    } catch (error) {
+      console.error('Error deleting reservation:', error);
+      alert('Erreur lors de la suppression');
+    } finally {
+      setDeletingId(null);
+    }
+  };
   return (
     <Sheet>
       <SheetTrigger asChild>
@@ -76,9 +104,14 @@ export default function ReservationsSidebar({ reservations }: ReservationsSideba
                       <Button 
                         variant="ghost" 
                         size="icon" 
-                        className="h-8 w-8 text-muted-foreground"
-                        onClick={() => handleDelete(res.id)}>
-                        <Trash2 size={16} />
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        onClick={() => handleDelete(res.id)}
+                        disabled={deletingId === res.id}>
+                        {deletingId === res.id ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={16} />
+                        )}
                         <span className="sr-only">Supprimer</span>
                       </Button>
                     </div>
