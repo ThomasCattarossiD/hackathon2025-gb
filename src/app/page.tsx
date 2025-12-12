@@ -27,7 +27,7 @@ export default function HomePage() {
         setIsAuthenticated(false);
       } finally {
         setLoading(false);
-      }
+      } 
     };
 
     checkAuth();

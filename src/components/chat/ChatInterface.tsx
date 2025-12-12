@@ -2,7 +2,9 @@
 
 import { useChat } from "@ai-sdk/react";
 import React, { useState, useRef, useEffect } from "react";
-import { Send, Mic, Bot, Volume2, VolumeX, User, StopCircle, ArrowDown, Check, X } from "lucide-react"; // Assure-toi d'avoir lucide-react
+import { Send, Mic, Bot, Volume2, VolumeX, User, StopCircle, ArrowDown, Check, X,
+  MapPin, Calendar, Clock, Monitor, Wifi, Wind, Video, Users 
+ } from "lucide-react"; // Assure-toi d'avoir lucide-react
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
@@ -12,7 +14,11 @@ import ReactMarkdown from "react-markdown";
 import ReservationsSidebar, { Reservation } from "./ReservationsSidebar";
 import { Separator } from "../ui/separator";
 import { createClient } from "@supabase/supabase-js";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../ui/card";
+import { Badge } from "../ui/badge";
+import ReservationCard, { isProposalFormat, parseConfirmationText } from "./ConfirmationCard"; 
 
+  
 
 declare global {
   interface Window {
@@ -78,7 +84,7 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
                     name: authData.user.fullName || authData.user.email.split('@')[0],
                     email: authData.user.email,
                     avatarUrl: "https://github.com/shadcn.png",
-                    role: authData.user.society || "Employé GoodBarber"
+                    role: authData.user.society || "Employé GoodBarbe r"
                 });
             }
         } catch (error) {
@@ -209,6 +215,29 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
         }
     }, []);
 
+    useEffect(() => {
+    if (!messages.length) return;
+
+    const last = messages[messages.length - 1];
+
+    // On ne lit QUE les messages de l'assistant
+    if (last.role !== "assistant") return;
+
+    // Récupérer le texte final consolidé
+    const fullText = last.parts
+        ?.map((p: any) => {
+            if (p.type === "text") return p.text;
+            if (p.type?.startsWith("tool-") && p.output?.text) return p.output.text;
+            return "";
+        })
+        .join("\n")
+        .trim();
+
+    if (fullText && isSoundEnabled) {
+        speakText(fullText);
+    }
+  }, [messages, voices]);
+
     const handleSend = () => {
         if (!input.trim()) return;
         sendMessage({ text: input });
@@ -338,10 +367,9 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
     };
 
   return (
-    <div className="flex flex-col h-[100dvh] bg-background text-foreground md:w-[30%] mx-auto">
+    <div className="flex flex-col h-full w-full bg-background text-foreground md:w-[30%] mx-auto">
       
       {/* 2. HEADER (Fixe) */}
-      {/* shrink-0 empêche le header de s'écraser si manque de place */}
       <div className="shrink-0 flex items-center justify-center p-4 border-b bg-card/50 backdrop-blur-sm z-10 relative">
         
         {/* Menu Gauche */}
@@ -362,8 +390,8 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="rounded-full h-8 w-8 bg-muted p-0">
-                <Avatar className="h-8 w-8">
+                className="rounded-full h-12 w-12 bg-muted p-0">
+                <Avatar className="h-12 w-12">
                   <AvatarImage
                     src={userProfile?.avatarUrl || "https://github.com/shadcn.png"}
                     alt={userProfile?.name || "Utilisateur"}
@@ -399,6 +427,13 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
                         </span>
                       </div>
                     </div>
+                    <div className="flex items-center justify-between p-3 border rounded-lg">
+                        <div className="flex items-center gap-2">
+                          {isSoundEnabled ? <Volume2 size={18} className="text-primary"/> : <VolumeX size={18} className="text-muted-foreground"/>}
+                          <span className="text-sm font-medium">Réponses vocales</span>
+                        </div>
+                        <input type="checkbox" className="toggle-checkbox h-5 w-5 accent-primary cursor-pointer" checked={isSoundEnabled} onChange={(e) => setIsSoundEnabled(e.target.checked)}/>
+                    </div>
                   </div>
                 </div>
               </PopoverContent>
@@ -421,13 +456,10 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
               // Pour les messages assistant : vérifier qu'il y a du contenu
               if (!message.parts || message.parts.length === 0) return false;
               
-              // Afficher si :
-              // 1) Il y a du texte normal
               const hasText = message.parts.some(
                 (part: any) => part.type === "text" && part.text?.trim().length > 0
               );
               
-              // 2) OU il y a un résultat de tool avec du texte
               const hasToolOutput = message.parts.some(
                 (part: any) => part.type?.startsWith("tool-") && part.output?.text?.trim().length > 0
               );
@@ -448,7 +480,7 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
               >
                 {/* Avatar */}
                 <Avatar className="h-8 w-8 shrink-0">
-                  <AvatarFallback className={message.role === "assistant" ? "bg-primary text-primary-foreground" : ""}>
+                  <AvatarFallback className={message.role === "assistant" ? "bg-gradient-to-br from-[#fe6c75] to-pink-500 text-white shadow-lg" : ""}>
                     {message.role === "assistant" ? <Bot size={16} /> : <User size={16} />}
                   </AvatarFallback>
                 </Avatar>
@@ -461,7 +493,7 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
                       : "bg-muted text-muted-foreground rounded-bl-none"
                   }`}
                 >
-                  {/* Afficher le texte ET les résultats des tools */}
+                  {/* Affichage du contenu du message */}
                   {message.parts && message.parts.length > 0 && (
                     <div
                       className={`prose prose-sm max-w-none
@@ -481,49 +513,61 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
                     >
                       {message.parts
                         .map((part: any, idx: number) => {
-                          // Afficher les parties texte normales
+                          const uniqueKey = `${message.id}-${idx}`;
+
+                          // --- CAS 1: TEXTE SIMPLE OU PROPOSITION ---
                           if (part.type === "text") {
-                            return <ReactMarkdown key={idx}>{part.text}</ReactMarkdown>;
+                            const textContent = part.text;
+                            
+                            // Vérification : est-ce une proposition formatée (avec ✅, 🆔, etc.) ?
+                            if (isProposalFormat(textContent)) {
+                                const data = parseConfirmationText(textContent);
+                                const roomName = data?.name; // Pour le message de confirmation
+
+                                return (
+                                    <ReservationCard 
+                                      key={uniqueKey}
+                                      text={textContent}
+                                      isAnswered={answeredConfirmations.has(uniqueKey)}
+                                      onConfirm={() => handleConfirm(uniqueKey, roomName)}
+                                      onReject={() => handleReject(uniqueKey, roomName)}
+                                    />
+                                );
+                            }
+
+                            // Sinon, texte Markdown classique
+                            return <ReactMarkdown key={idx}>{textContent}</ReactMarkdown>;
                           }
                           
-                          // Afficher les résultats des tool calls (checkAvailability, createBooking, etc.)
+                          // --- CAS 2: RETOUR D'OUTIL (TOOL RESULT) ---
                           if (part.type?.startsWith("tool-") && part.output?.text) {
-                            const hasConfirmation = part.output?.requiresConfirmation === true;
-                            const confirmationData = part.output?.confirmationData;
-                            const confirmationId = `${message.id}-${idx}`;
-                            const isAnswered = answeredConfirmations.has(confirmationId);
+                            const textContent = part.output.text;
                             
+                            // Certains outils peuvent renvoyer un flag 'requiresConfirmation'
+                            // OU on vérifie le format du texte retourné
+                            const hasConfirmation = part.output?.requiresConfirmation === true;
+                            
+                            if (hasConfirmation || isProposalFormat(textContent)) {
+                              const confirmationData = part.output?.confirmationData;
+                              // On essaie de récupérer le nom via les data de l'outil, sinon via le parsing du texte
+                              const roomName = confirmationData?.roomName || parseConfirmationText(textContent)?.name;
+
+                              return (
+                                <ReservationCard 
+                                  key={uniqueKey}
+                                  text={textContent}
+                                  isAnswered={answeredConfirmations.has(uniqueKey)}
+                                  onConfirm={() => handleConfirm(uniqueKey, roomName)}
+                                  onReject={() => handleReject(uniqueKey, roomName)}
+                                />
+                              );
+                            }
+
+                            // Retour d'outil standard -> Texte simple (souvent technique ou de debug)
                             return (
-                              <div key={idx}>
-                                <ReactMarkdown>{part.output.text}</ReactMarkdown>
-                                {hasConfirmation && !isAnswered && (
-                                  <div className="flex gap-2 mt-3 pt-3 border-t border-border/50">
-                                    <Button
-                                      size="sm"
-                                      variant="default"
-                                      className="flex-1 gap-1"
-                                      onClick={() => handleConfirm(confirmationId, confirmationData?.roomName)}
-                                    >
-                                      <Check size={16} />
-                                      Réserver
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="flex-1 gap-1"
-                                      onClick={() => handleReject(confirmationId, confirmationData?.roomName)}
-                                    >
-                                      <X size={16} />
-                                      Autre salle
-                                    </Button>
-                                  </div>
-                                )}
-                                {hasConfirmation && isAnswered && (
-                                  <div className="text-xs text-muted-foreground/70 mt-2 italic">
-                                    Réponse envoyée
-                                  </div>
-                                )}
-                              </div>
+                                <div key={idx} className="mt-2">
+                                    <ReactMarkdown>{textContent}</ReactMarkdown>
+                                </div>
                             );
                           }
                           
@@ -542,7 +586,6 @@ export default function ChatInterface({ userId }: ChatInterfaceProps) {
       </div>
 
       {/* 4. FOOTER (Fixe) */}
-      {/* shrink-0 : Empêche le footer de disparaître */}
       <div className="shrink-0 py-2 px-4 bg-background border-t z-10 relative">
         
         {isSpeaking && (
