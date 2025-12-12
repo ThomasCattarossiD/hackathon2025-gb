@@ -35,6 +35,7 @@ export default function LoginPage() {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify(formData),
       });
 
@@ -45,6 +46,9 @@ export default function LoginPage() {
 
       const data = await response.json();
       toast.success(`Bienvenue, ${data.user.fullName}!`);
+      
+      // Attendre un peu pour s'assurer que le cookie est bien défini
+      await new Promise(resolve => setTimeout(resolve, 100));
       
       // Rediriger vers le chat
       router.push('/chat');
